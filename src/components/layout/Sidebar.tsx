@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   Briefcase,
   LayoutDashboard,
@@ -7,8 +7,9 @@ import {
   BarChart3,
   Menu,
   X,
-  User,
+  LogOut,
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
@@ -17,6 +18,17 @@ const navItems = [
 ];
 
 export function Sidebar() {
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/login', { replace: true });
+  };
+
+  const displayName = user?.email?.split('@')[0] || 'User';
+  const initial = (user?.email?.[0] || 'U').toUpperCase();
+
   return (
     <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200">
       {/* Logo */}
@@ -50,14 +62,25 @@ export function Sidebar() {
 
       {/* User section */}
       <div className="px-3 py-4 border-t border-slate-100">
-        <div className="flex items-center gap-3 px-3 py-2">
-          <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center">
-            <User className="w-4 h-4 text-brand-600" />
+        <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-brand-600 text-white font-semibold text-xs flex items-center justify-center shrink-0">
+              {initial}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900 truncate capitalize">{displayName}</p>
+              <p className="text-[11px] text-slate-500 truncate" title={user?.email || ''}>
+                {user?.email || 'Logged in'}
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-900 truncate">Alex Johnson</p>
-            <p className="text-xs text-slate-500 truncate">alex@email.com</p>
-          </div>
+          <button
+            onClick={handleSignOut}
+            title="Sign out"
+            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors shrink-0"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </aside>
@@ -65,7 +88,17 @@ export function Sidebar() {
 }
 
 export function MobileHeader() {
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/login', { replace: true });
+  };
+
+  const displayName = user?.email?.split('@')[0] || 'User';
+  const initial = (user?.email?.[0] || 'U').toUpperCase();
 
   return (
     <>
@@ -92,7 +125,7 @@ export function MobileHeader() {
             className="lg:hidden fixed inset-0 bg-black/20 z-40"
             onClick={() => setIsOpen(false)}
           />
-          <div className="lg:hidden fixed top-0 left-0 w-64 h-full bg-white z-50 shadow-xl animate-slide-in">
+          <div className="lg:hidden fixed top-0 left-0 w-64 h-full bg-white z-50 shadow-xl flex flex-col animate-slide-in">
             <div className="flex items-center justify-between px-5 py-5 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
@@ -107,7 +140,7 @@ export function MobileHeader() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <nav className="px-3 py-4 space-y-1">
+            <nav className="flex-1 px-3 py-4 space-y-1">
               {navItems.map((item) => (
                 <NavLink
                   key={item.to}
@@ -127,6 +160,30 @@ export function MobileHeader() {
                 </NavLink>
               ))}
             </nav>
+
+            {/* Mobile User section */}
+            <div className="p-3 border-t border-slate-100">
+              <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-brand-600 text-white font-semibold text-xs flex items-center justify-center shrink-0">
+                    {initial}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-900 truncate capitalize">{displayName}</p>
+                    <p className="text-[11px] text-slate-500 truncate" title={user?.email || ''}>
+                      {user?.email || 'Logged in'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  title="Sign out"
+                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors shrink-0"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
         </>
       )}

@@ -1,50 +1,94 @@
-# React + TypeScript + Vite
+# JobTrack 💼
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A modern, polished job application tracking web app inspired by Linear and Notion. Built with React, TypeScript, and Tailwind CSS.
 
-Currently, two official plugins are available:
+![JobTrack Interface Preview](https://raw.githubusercontent.com/linry07/jobtrack/main/public/vite.svg) <!-- optional banner/screenshot placeholder -->
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## Expanding the ESLint configuration
+## ✨ Features
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+- **📊 Overview Dashboard:** Key application metrics (Total, Interviews, Offers, Response Rate), visual monthly trends via Recharts, and a real-time activity feed.
+- **📋 Kanban Pipeline Board:** Interactive drag-and-drop board organized across 5 stages:
+  - `Saved`
+  - `Applied`
+  - `Interviewing`
+  - `Offer`
+  - `Rejected`
+- **📈 Comprehensive Analytics:**
+  - Applications over time (bar chart)
+  - Status distribution breakdown (donut chart)
+  - Historical response rate trend (area chart)
+  - 4-stage visual conversion funnel
+- **⚡ Interactive Actions:** Add applications through a modal dialog, inspect cards with contact details, notes, and compensation, or delete entries.
+- **💾 LocalStorage Persistence:** Automatically preserves all changes (additions, deletions, stage moves) across routes and page refreshes.
+- **📱 Responsive UI/UX:** Clean typography (Inter), subtle borders, restrained indigo accents, and full desktop/mobile layout adaptability.
 
-- Configure the top-level `parserOptions` property like this:
+---
 
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+## 🛠️ Tech Stack
+
+- **Framework:** [React 18](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
+- **Build Tool:** [Vite](https://vitejs.dev/)
+- **Styling:** [Tailwind CSS](https://tailwindcss.com/)
+- **Routing:** [React Router v7](https://reactrouter.com/)
+- **Charts:** [Recharts](https://recharts.org/)
+- **Icons:** [Lucide React](https://lucide.dev/)
+
+---
+
+## 🚀 Getting Started
+
+### 1. Clone the repository
+```bash
+git clone git@github.com:linry07/jobtrack.git
+cd jobtrack
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
-
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
-
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
+### 2. Install dependencies
+```bash
+npm install
 ```
+
+### 3. Start local development server
+```bash
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser.
+
+### 4. Build for production
+```bash
+npm run build
+```
+
+---
+
+## 📁 Project Structure
+
+```
+src/
+├── components/
+│   └── layout/
+│       ├── Layout.tsx         # Main responsive shell
+│       └── Sidebar.tsx        # Linear-style sidebar & mobile menu
+├── context/
+│   └── JobTrackContext.tsx    # Central state & localStorage syncing
+├── data/
+│   └── sampleData.ts          # Realistic initial sample data
+├── pages/
+│   ├── Dashboard.tsx          # Key metrics, trends, recent activity
+│   ├── Applications.tsx       # Drag-and-drop Kanban board & modals
+│   └── Analytics.tsx          # Recharts visualizations & funnel
+├── types/
+│   └── index.ts               # Core TypeScript definitions
+├── App.tsx                    # Route definitions
+├── index.css                  # Global Tailwind & Inter font setup
+└── main.tsx                   # App entrypoint
+```
+
+---
+
+## 📄 License
+
+MIT

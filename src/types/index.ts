@@ -9,6 +9,8 @@ export interface Application {
   appliedDate: string;
   salary?: string;
   notes?: string;
+  description?: string;
+  employmentType?: string;
   url?: string;
   contactName?: string;
   contactEmail?: string;

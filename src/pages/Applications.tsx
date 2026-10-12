@@ -11,6 +11,11 @@ import {
   MoreVertical,
   Building2,
   Trash2,
+  Sparkles,
+  Loader2,
+  AlertCircle,
+  ExternalLink,
+  AlertTriangle,
 } from 'lucide-react';
 import { Application, ApplicationStatus } from '../types';
 import { useJobTrack } from '../context/JobTrackContext';
@@ -47,18 +52,35 @@ export default function Applications() {
   const [draggedAppId, setDraggedAppId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<ApplicationStatus | null>(null);
 
+  // Smart Job Import state
+  const [jobUrl, setJobUrl] = useState('');
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [extractSuccess, setExtractSuccess] = useState(false);
+  const [showManualPaste, setShowManualPaste] = useState(false);
+  const [pastedText, setPastedText] = useState('');
+
   // Form State for new application
   const [formData, setFormData] = useState({
     company: '',
     position: '',
     location: '',
-    status: 'saved' as ApplicationStatus,
+    status: 'saved' as ApplicationStatus, // Requirement 8: default to 'saved'
     salary: '',
+    employmentType: '',
+    description: '',
     notes: '',
     contactName: '',
     contactEmail: '',
     url: '',
   });
+
+  // Duplicate URL check
+  const duplicateApp = formData.url
+    ? applications.find(
+        (app) => app.url && app.url.trim().toLowerCase() === formData.url.trim().toLowerCase()
+      )
+    : null;
 
   const filteredApps = applications.filter((app) => {
     if (!searchQuery) return true;
@@ -109,34 +131,126 @@ export default function Applications() {
     }
   };
 
-  const handleCreateApplication = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.company || !formData.position) return;
-
-    addApplication({
-      company: formData.company,
-      position: formData.position,
-      location: formData.location || 'Remote',
-      status: formData.status,
-      salary: formData.salary || undefined,
-      notes: formData.notes || undefined,
-      contactName: formData.contactName || undefined,
-      contactEmail: formData.contactEmail || undefined,
-      url: formData.url || undefined,
-    });
-
+  // Reset modal state
+  const resetFormModal = () => {
     setIsAddModalOpen(false);
+    setJobUrl('');
+    setIsExtracting(false);
+    setExtractError(null);
+    setExtractSuccess(false);
+    setShowManualPaste(false);
+    setPastedText('');
     setFormData({
       company: '',
       position: '',
       location: '',
       status: 'saved',
       salary: '',
+      employmentType: '',
+      description: '',
       notes: '',
       contactName: '',
       contactEmail: '',
       url: '',
     });
+  };
+
+  // Handle Smart Job Import (Autofill)
+  const handleAutofill = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!jobUrl.trim()) return;
+
+    setIsExtracting(true);
+    setExtractError(null);
+    setExtractSuccess(false);
+
+    try {
+      const response = await fetch('/api/extract-job', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: jobUrl.trim() }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || `Failed to extract job details (${response.status})`);
+      }
+
+      const extracted = result.data || {};
+
+      // Requirement 3 & 4: Automatically populate the form with extracted info
+      // Requirement 7: Missing fields remain blank rather than inventing values
+      // Requirement 8: Default status remains 'saved'
+      setFormData((prev) => ({
+        ...prev,
+        company: extracted.company || prev.company || '',
+        position: extracted.position || prev.position || '',
+        location: extracted.location || prev.location || '',
+        salary: extracted.salary || prev.salary || '',
+        employmentType: extracted.employmentType || prev.employmentType || '',
+        description: extracted.description || prev.description || '',
+        url: extracted.url || jobUrl.trim(),
+        status: prev.status || 'saved',
+      }));
+
+      setExtractSuccess(true);
+    } catch (err: any) {
+      setExtractError(err.message || 'Unable to extract information from this job URL.');
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  // Handle parsing from pasted job description text (Requirement 9 fallback)
+  const handleParsePastedText = () => {
+    if (!pastedText.trim()) return;
+
+    const text = pastedText.trim();
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+    // Heuristics: first line often title, second line company
+    let guessedTitle = '';
+    let guessedCompany = '';
+    if (lines.length > 0) guessedTitle = lines[0];
+    if (lines.length > 1 && lines[1].length < 40) guessedCompany = lines[1];
+
+    // Simple salary search in text
+    const salaryRegex = /(?:(\$|USD\s*|€|£)\s*(\d{2,3}(?:,\d{3})*(?:\.\d{2})?(?:[kK])?)\s*(?:-|to)\s*(\$|USD\s*|€|£)?\s*(\d{2,3}(?:,\d{3})*(?:\.\d{2})?(?:[kK])?)(?:\s*(?:\/|\s+per\s+)?(yr|year|annum|hr|hour|mo|month))?)/i;
+    const salaryMatch = text.match(salaryRegex);
+
+    setFormData((prev) => ({
+      ...prev,
+      position: prev.position || guessedTitle,
+      company: prev.company || guessedCompany,
+      description: text,
+      salary: prev.salary || (salaryMatch ? salaryMatch[0].trim() : ''),
+    }));
+
+    setShowManualPaste(false);
+    setPastedText('');
+  };
+
+  // Requirement 6: The user must review and explicitly click "Save Application"
+  const handleCreateApplication = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.company || !formData.position) return;
+
+    addApplication({
+      company: formData.company.trim(),
+      position: formData.position.trim(),
+      location: formData.location.trim() || 'Remote',
+      status: formData.status,
+      salary: formData.salary.trim() || undefined,
+      description: formData.description.trim() || undefined,
+      employmentType: formData.employmentType.trim() || undefined,
+      notes: formData.notes.trim() || undefined,
+      contactName: formData.contactName.trim() || undefined,
+      contactEmail: formData.contactEmail.trim() || undefined,
+      url: formData.url.trim() || undefined,
+    });
+
+    resetFormModal();
   };
 
   return (
@@ -230,8 +344,16 @@ export default function Applications() {
                         </span>
                       </div>
 
+                      {app.employmentType && (
+                        <div className="mt-2">
+                          <span className="inline-block text-[10px] font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-600">
+                            {app.employmentType}
+                          </span>
+                        </div>
+                      )}
+
                       {app.salary && (
-                        <div className="flex items-center gap-1 mt-2.5">
+                        <div className="flex items-center gap-1 mt-2">
                           <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
                           <span className="text-xs font-semibold text-emerald-700">{app.salary}</span>
                         </div>
@@ -265,7 +387,7 @@ export default function Applications() {
       {/* Modal: Application Detail View */}
       {selectedApp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-slide-up relative">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-slide-up relative max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setSelectedApp(null)}
               className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
@@ -277,9 +399,22 @@ export default function Applications() {
               <div className="w-10 h-10 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center text-brand-600">
                 <Building2 className="w-5 h-5" />
               </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900 leading-tight">{selectedApp.company}</h3>
-                <p className="text-sm font-medium text-slate-500">{selectedApp.position}</p>
+              <div className="min-w-0 flex-1 pr-6">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-900 leading-tight truncate">{selectedApp.company}</h3>
+                  {selectedApp.url && (
+                    <a
+                      href={selectedApp.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-slate-400 hover:text-brand-600 transition-colors"
+                      title="Open job posting"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  )}
+                </div>
+                <p className="text-sm font-medium text-slate-500 truncate">{selectedApp.position}</p>
               </div>
             </div>
 
@@ -326,6 +461,22 @@ export default function Applications() {
                 </div>
               </div>
 
+              {selectedApp.employmentType && (
+                <div>
+                  <span className="text-xs text-slate-400 font-medium">Employment Type</span>
+                  <p className="mt-1 text-xs text-slate-700 font-medium">{selectedApp.employmentType}</p>
+                </div>
+              )}
+
+              {selectedApp.description && (
+                <div>
+                  <span className="text-xs text-slate-400 font-medium">Job Description</span>
+                  <div className="mt-1 text-xs text-slate-700 bg-slate-50 border border-slate-100 p-3 rounded-lg leading-relaxed max-h-48 overflow-y-auto whitespace-pre-wrap">
+                    {selectedApp.description}
+                  </div>
+                </div>
+              )}
+
               {selectedApp.contactName && (
                 <div>
                   <span className="text-xs text-slate-400 font-medium">Point of Contact</span>
@@ -360,7 +511,7 @@ export default function Applications() {
             <div className="flex items-center justify-between pt-4">
               <button
                 onClick={() => handleDeleteApplication(selectedApp.id)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Remove</span>
@@ -368,7 +519,7 @@ export default function Applications() {
 
               <button
                 onClick={() => setSelectedApp(null)}
-                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
               >
                 Done
               </button>
@@ -377,46 +528,174 @@ export default function Applications() {
         </div>
       )}
 
-      {/* Modal: Add Application */}
+      {/* Modal: Add Application (with Smart Job Import) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-slide-up relative">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-slide-up relative max-h-[92vh] overflow-y-auto">
             <button
-              onClick={() => setIsAddModalOpen(false)}
+              onClick={resetFormModal}
               className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="text-lg font-bold text-slate-900 mb-1">New Job Application</h3>
-            <p className="text-xs text-slate-500 mb-4">Add a new company or role to your tracking board.</p>
+            <div className="mb-4">
+              <h3 className="text-lg font-bold text-slate-900 leading-tight">New Job Application</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Paste a job posting link for smart auto-extraction, or enter details manually.
+              </p>
+            </div>
 
+            {/* Smart Job Import Section (Requirement 1, 2, 3, 9) */}
+            <div className="mb-5 p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                  <Sparkles className="w-3.5 h-3.5 text-brand-600" />
+                  <span>Smart Job Import</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowManualPaste(!showManualPaste)}
+                  className="text-[11px] text-brand-600 hover:text-brand-700 font-medium transition-colors"
+                >
+                  {showManualPaste ? 'Hide text paste' : 'Paste text instead'}
+                </button>
+              </div>
+
+              {!showManualPaste ? (
+                <div className="space-y-2">
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      placeholder="Paste posting URL (e.g. LinkedIn, Greenhouse, Lever, etc.)..."
+                      value={jobUrl}
+                      onChange={(e) => {
+                        setJobUrl(e.target.value);
+                        setExtractError(null);
+                        setExtractSuccess(false);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAutofill();
+                        }
+                      }}
+                      className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                    />
+                    <button
+                      type="button"
+                      disabled={isExtracting || !jobUrl.trim()}
+                      onClick={handleAutofill}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xs cursor-pointer flex-shrink-0"
+                    >
+                      {isExtracting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Extracting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Autofill</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {extractSuccess && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-700 bg-emerald-50 px-2.5 py-1.5 rounded-md border border-emerald-200 animate-fade-in">
+                      <Sparkles className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                      <span>Extracted job details into the form below! Review and adjust any values.</span>
+                    </div>
+                  )}
+
+                  {extractError && (
+                    <div className="flex items-start gap-1.5 text-[11px] text-rose-700 bg-rose-50 px-2.5 py-1.5 rounded-md border border-rose-200 animate-fade-in">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span>{extractError}</span>{' '}
+                        <button
+                          type="button"
+                          onClick={() => setShowManualPaste(true)}
+                          className="underline font-medium hover:text-rose-900 ml-1"
+                        >
+                          Paste job description text instead
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Fallback text paste mode (Requirement 9) */
+                <div className="space-y-2 animate-fade-in">
+                  <textarea
+                    rows={3}
+                    placeholder="Paste job posting text or description here..."
+                    value={pastedText}
+                    onChange={(e) => setPastedText(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 resize-none"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowManualPaste(false)}
+                      className="px-2.5 py-1 rounded text-xs text-slate-500 hover:bg-slate-200/60 font-medium"
+                    >
+                      Back to URL
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!pastedText.trim()}
+                      onClick={handleParsePastedText}
+                      className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      Fill Form from Text
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Duplicate Warning */}
+            {duplicateApp && (
+              <div className="mb-4 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs animate-fade-in">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold">Possible duplicate detected:</span> You already have an application for{' '}
+                  <span className="font-medium">{duplicateApp.company} ({duplicateApp.position})</span> with this URL.
+                </div>
+              </div>
+            )}
+
+            {/* Main Application Form (Requirement 5: all fields remain editable) */}
             <form onSubmit={handleCreateApplication} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-700 font-medium mb-1">Company *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Acme Corp"
-                  value={formData.company}
-                  onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Company *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Acme Corp"
+                    value={formData.company}
+                    onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Position / Title *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Senior Frontend Engineer"
+                    value={formData.position}
+                    onChange={(e) => setFormData({ ...formData, position: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-slate-700 font-medium mb-1">Position / Title *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Senior Frontend Engineer"
-                  value={formData.position}
-                  onChange={(e) => setFormData({ ...formData, position: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-slate-700 font-medium mb-1">Stage</label>
                   <select
@@ -436,49 +715,85 @@ export default function Applications() {
                   <label className="block text-slate-700 font-medium mb-1">Location</label>
                   <input
                     type="text"
-                    placeholder="e.g. Remote / New York"
+                    placeholder="e.g. Remote / San Francisco, CA"
                     value={formData.location}
                     onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Employment Type</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Full-time / Contract"
+                    value={formData.employmentType}
+                    onChange={(e) => setFormData({ ...formData, employmentType: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Compensation / Salary</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. $140,000 - $180,000 / yr"
+                    value={formData.salary}
+                    onChange={(e) => setFormData({ ...formData, salary: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Posting URL</label>
+                  <input
+                    type="url"
+                    placeholder="https://..."
+                    value={formData.url}
+                    onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-700 font-medium mb-1">Estimated Compensation</label>
-                <input
-                  type="text"
-                  placeholder="e.g. $140k - $160k"
-                  value={formData.salary}
-                  onChange={(e) => setFormData({ ...formData, salary: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                <label className="block text-slate-700 font-medium mb-1">Job Description</label>
+                <textarea
+                  rows={3}
+                  placeholder="Responsibilities, requirements, qualifications..."
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 resize-none"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-700 font-medium mb-1">Notes / Context</label>
+                <label className="block text-slate-700 font-medium mb-1">Personal Notes / Next Steps</label>
                 <textarea
                   rows={2}
-                  placeholder="Referral contact, tech stack highlights, next steps..."
+                  placeholder="Referral contact, application strategy, recruiter notes..."
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 resize-none"
                 />
               </div>
 
+              {/* Requirement 6: Explicit Save Application button; Cancel does not save */}
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 font-medium transition-colors"
+                  onClick={resetFormModal}
+                  className="px-3.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 font-medium transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-brand-600 text-white font-medium hover:bg-brand-700 transition-colors shadow-sm"
+                  className="px-4 py-2 rounded-lg bg-brand-600 text-white font-medium hover:bg-brand-700 transition-colors shadow-sm cursor-pointer"
                 >
-                  Save Application
+                  Add Application
                 </button>
               </div>
             </form>

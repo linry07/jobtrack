@@ -34,6 +34,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSession(session);
       setUser(session?.user ?? null);
       setLoading(false);
+
+      if (session) {
+        supabase.auth.getUser().then(({ data: { user: freshUser } }) => {
+          if (freshUser) {
+            setUser(freshUser);
+          }
+        });
+      }
     });
 
     // 2. Listen for auth changes (sign in, sign out, token refresh, password recovery)
@@ -54,7 +62,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (!error && data?.user) {
+      setUser(data.user);
+      setSession(data.session);
+    }
     return { error };
   };
 

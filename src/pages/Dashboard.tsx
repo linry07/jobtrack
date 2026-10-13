@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { monthlyStats } from '../data/sampleData';
 import { useJobTrack } from '../context/JobTrackContext';
+import { useAuth } from '../context/AuthContext';
 
 const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -34,6 +35,8 @@ const activityDotColors: Record<string, string> = {
 
 export default function Dashboard() {
   const { applications, activities } = useJobTrack();
+  const { user } = useAuth();
+  const displayName = user?.user_metadata?.display_name?.trim() || user?.email?.split('@')[0] || 'there';
 
   const totalApps = applications.length;
   const interviews = applications.filter((a) => a.status === 'interviewing').length;
@@ -80,7 +83,9 @@ export default function Dashboard() {
       {/* Page Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
-        <p className="text-sm text-slate-500 mt-1">Welcome back, Alex — here's your job search overview</p>
+        <p className="text-sm text-slate-500 mt-1">
+          Welcome back, {displayName} — here&rsquo;s your job search overview
+        </p>
       </div>
 
       {/* Stats Grid */}

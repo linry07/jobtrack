@@ -9,6 +9,7 @@ interface AuthContextType {
   isConfigured: boolean;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
   signUp: (email: string, password: string) => Promise<{ data: { user: User | null; session: Session | null } | null; error: AuthError | null }>;
+  signInWithGoogle: () => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
   resetPasswordForEmail: (email: string) => Promise<{ error: AuthError | null }>;
   updatePassword: (newPassword: string) => Promise<{ error: AuthError | null }>;
@@ -67,6 +68,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { data, error };
   };
 
+  // Google OAuth — browser navigates away to Google, then back to origin.
+  // detectSessionInUrl: true (set in supabase.ts) handles the token on return.
+  const signInWithGoogle = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/`,
+      },
+    });
+    return { error };
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -96,6 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isConfigured: isSupabaseConfigured,
         signIn,
         signUp,
+        signInWithGoogle,
         signOut,
         resetPasswordForEmail,
         updatePassword,

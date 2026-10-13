@@ -8,8 +8,10 @@ import {
   Menu,
   X,
   LogOut,
+  Pencil,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { EditDisplayNameModal } from '../common/EditDisplayNameModal';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
@@ -20,70 +22,84 @@ const navItems = [
 export function Sidebar() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
   };
 
-  const displayName = user?.email?.split('@')[0] || 'User';
-  const initial = (user?.email?.[0] || 'U').toUpperCase();
+  const displayName = user?.user_metadata?.display_name?.trim() || user?.email?.split('@')[0] || 'User';
+  const initial = (displayName[0] || 'U').toUpperCase();
 
   return (
-    <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200">
-      {/* Logo */}
-      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-slate-100">
-        <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
-          <Briefcase className="w-4 h-4 text-white" />
-        </div>
-        <span className="text-lg font-semibold text-slate-900">JobTrack</span>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 ${
-                isActive
-                  ? 'bg-brand-50 text-brand-600'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`
-            }
-          >
-            <item.icon className="w-[18px] h-[18px]" />
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-
-      {/* User section */}
-      <div className="px-3 py-4 border-t border-slate-100">
-        <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-brand-600 text-white font-semibold text-xs flex items-center justify-center shrink-0">
-              {initial}
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-slate-900 truncate capitalize">{displayName}</p>
-              <p className="text-[11px] text-slate-500 truncate" title={user?.email || ''}>
-                {user?.email || 'Logged in'}
-              </p>
-            </div>
+    <>
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-white border-r border-slate-200">
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 px-5 py-5 border-b border-slate-100">
+          <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+            <Briefcase className="w-4 h-4 text-white" />
           </div>
-          <button
-            onClick={handleSignOut}
-            title="Sign out"
-            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors shrink-0"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+          <span className="text-lg font-semibold text-slate-900">JobTrack</span>
         </div>
-      </div>
-    </aside>
+
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-4 space-y-1">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 ${
+                  isActive
+                    ? 'bg-brand-50 text-brand-600'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`
+              }
+            >
+              <item.icon className="w-[18px] h-[18px]" />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* User section */}
+        <div className="px-3 py-4 border-t border-slate-100">
+          <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-full bg-brand-600 text-white font-semibold text-xs flex items-center justify-center shrink-0">
+                {initial}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="text-xs font-semibold text-slate-900 truncate capitalize">{displayName}</p>
+                  <button
+                    onClick={() => setIsEditModalOpen(true)}
+                    title="Change display name"
+                    className="p-0.5 text-slate-400 hover:text-brand-600 hover:bg-slate-200/60 rounded transition-colors"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 truncate" title={user?.email || ''}>
+                  {user?.email || 'Logged in'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleSignOut}
+              title="Sign out"
+              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors shrink-0"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <EditDisplayNameModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} />
+    </>
   );
 }
 
@@ -91,14 +107,15 @@ export function MobileHeader() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
     navigate('/login', { replace: true });
   };
 
-  const displayName = user?.email?.split('@')[0] || 'User';
-  const initial = (user?.email?.[0] || 'U').toUpperCase();
+  const displayName = user?.user_metadata?.display_name?.trim() || user?.email?.split('@')[0] || 'User';
+  const initial = (displayName[0] || 'U').toUpperCase();
 
   return (
     <>
@@ -169,7 +186,16 @@ export function MobileHeader() {
                     {initial}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-slate-900 truncate capitalize">{displayName}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-semibold text-slate-900 truncate capitalize">{displayName}</p>
+                      <button
+                        onClick={() => setIsEditModalOpen(true)}
+                        title="Change display name"
+                        className="p-0.5 text-slate-400 hover:text-brand-600 hover:bg-slate-200/60 rounded transition-colors"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </div>
                     <p className="text-[11px] text-slate-500 truncate" title={user?.email || ''}>
                       {user?.email || 'Logged in'}
                     </p>
@@ -187,6 +213,8 @@ export function MobileHeader() {
           </div>
         </>
       )}
+
+      <EditDisplayNameModal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} />
     </>
   );
 }

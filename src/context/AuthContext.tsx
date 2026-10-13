@@ -13,6 +13,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   resetPasswordForEmail: (email: string) => Promise<{ error: AuthError | null }>;
   updatePassword: (newPassword: string) => Promise<{ error: AuthError | null }>;
+  updateDisplayName: (displayName: string) => Promise<{ error: AuthError | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -100,6 +101,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { error };
   };
 
+  const updateDisplayName = async (displayName: string) => {
+    const trimmed = displayName.trim();
+    if (!isSupabaseConfigured) {
+      if (user) {
+        const updatedUser = {
+          ...user,
+          user_metadata: {
+            ...user.user_metadata,
+            display_name: trimmed,
+          },
+        };
+        setUser(updatedUser as User);
+      }
+      return { error: null };
+    }
+
+    const { data, error } = await supabase.auth.updateUser({
+      data: {
+        display_name: trimmed,
+      },
+    });
+
+    if (!error && data?.user) {
+      setUser(data.user);
+    }
+
+    return { error };
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -113,6 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signOut,
         resetPasswordForEmail,
         updatePassword,
+        updateDisplayName,
       }}
     >
       {children}

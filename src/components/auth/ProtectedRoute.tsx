@@ -2,6 +2,7 @@ import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { Briefcase, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { OnboardingScreen } from './OnboardingScreen';
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading, isConfigured } = useAuth();
@@ -27,6 +28,12 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
   // If Supabase is configured and there's no logged-in user, redirect to login
   if (isConfigured && !user) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // If user is logged in but has not saved a JobTrack display name, show onboarding
+  const hasDisplayName = Boolean(user?.user_metadata?.display_name?.trim());
+  if (user && !hasDisplayName) {
+    return <OnboardingScreen />;
   }
 
   return <>{children}</>;

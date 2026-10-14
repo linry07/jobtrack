@@ -4,9 +4,6 @@ import Dashboard from './pages/Dashboard';
 import Applications from './pages/Applications';
 import Analytics from './pages/Analytics';
 import Login from './pages/Login';
-import SignUp from './pages/SignUp';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
 import { AuthProvider } from './context/AuthContext';
 import { JobTrackProvider } from './context/JobTrackContext';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
@@ -17,11 +14,13 @@ export default function App() {
       <JobTrackProvider>
         <BrowserRouter>
           <Routes>
-            {/* Public Auth Routes */}
+            {/* Public Auth Route */}
             <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<SignUp />} />
-            <Route path="/forgot-password" element={<ForgotPassword />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
+
+            {/* Legacy auth route redirects to Google-only login */}
+            <Route path="/signup" element={<Navigate to="/login" replace />} />
+            <Route path="/forgot-password" element={<Navigate to="/login" replace />} />
+            <Route path="/reset-password" element={<Navigate to="/login" replace />} />
 
             {/* Protected Workspace Routes */}
             <Route

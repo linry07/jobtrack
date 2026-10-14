@@ -12,11 +12,12 @@ if (!globalThis.WebSocket) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const loginSrcPath = path.resolve(__dirname, '../src/pages/Login.tsx');
+const appSrcPath = path.resolve(__dirname, '../src/App.tsx');
 const protectedRouteSrcPath = path.resolve(__dirname, '../src/components/auth/ProtectedRoute.tsx');
 const envPath = path.resolve(__dirname, '../.env.local');
 
 console.log('================================================================');
-console.log('🧪 Login Page Auth Options & UI Regression Verification');
+console.log('🧪 Google-Only Authentication & UI Regression Verification');
 console.log('================================================================\n');
 
 const results = { passed: [], failed: [] };
@@ -35,51 +36,78 @@ function runCheck(description, fn) {
 // 1. Static UI verification on Login.tsx
 const loginSrc = fs.readFileSync(loginSrcPath, 'utf8');
 
-runCheck('Login.tsx contains "New to JobTrack?" section header', () => {
-  assert(loginSrc.includes('New to JobTrack?'), 'Must have "New to JobTrack?" section header');
+runCheck('Login.tsx contains "Welcome to JobTrack" heading', () => {
+  assert(loginSrc.includes('Welcome to JobTrack'), 'Must contain "Welcome to JobTrack" heading');
 });
 
-runCheck('Login.tsx explains free account creation through Google and existing Google login', () => {
+runCheck('Login.tsx contains expected subtitle', () => {
   assert(
-    /create a free account.*google/i.test(loginSrc),
-    'Must explain creating a free account with Google'
-  );
-  assert(
-    /existing google users.*sign in/i.test(loginSrc) || /sign.*in.*google/i.test(loginSrc),
-    'Must indicate Google sign-in works for existing Google users'
+    loginSrc.includes('Track your job applications, stay organized, and manage your job search in one place.'),
+    'Must contain the required subtitle text'
   );
 });
 
-runCheck('Login.tsx keeps "Continue with Google" button with GoogleIcon', () => {
+runCheck('Login.tsx explains that Google works for both new and returning users', () => {
+  assert(
+    /new users are registered automatically/i.test(loginSrc) || /new.*returning/i.test(loginSrc),
+    'Must explain that new users are registered automatically'
+  );
+  assert(
+    /returning users/i.test(loginSrc),
+    'Must mention returning users'
+  );
+});
+
+runCheck('Login.tsx keeps "Continue with Google" button and official GoogleIcon', () => {
   assert(loginSrc.includes('Continue with Google'), 'Must include "Continue with Google"');
   assert(loginSrc.includes('<GoogleIcon />'), 'Must render GoogleIcon');
   assert(loginSrc.includes('onClick={handleGoogleSignIn}'), 'Must trigger handleGoogleSignIn');
+  assert(loginSrc.includes('signInWithGoogle'), 'Must call signInWithGoogle');
 });
 
-runCheck('Login.tsx labels email/password section "Already have an email/password account?"', () => {
+runCheck('Login.tsx has NO email or password input fields', () => {
+  assert(!loginSrc.includes('type="email"'), 'Must not have email input field');
+  assert(!loginSrc.includes('type="password"'), 'Must not have password input field');
+});
+
+runCheck('Login.tsx has NO email/password Sign In button or Forgot Password link', () => {
+  assert(!loginSrc.includes('type="submit"'), 'Must not have form submit button');
+  assert(!loginSrc.includes('Forgot password?'), 'Must not have Forgot password link');
+  assert(!loginSrc.includes('forgot-password'), 'Must not link to forgot-password');
+});
+
+runCheck('Login.tsx has NO references to email/password accounts or registration', () => {
+  assert(!loginSrc.includes('Already have an email/password account?'), 'Must not reference email/password accounts');
+  assert(!loginSrc.includes('New to JobTrack?'), 'Must not have legacy dual-auth section title');
+  assert(!loginSrc.includes('/signup'), 'Must not link to /signup');
+  assert(!/sign up with email/i.test(loginSrc), 'Must not mention email signup');
+});
+
+runCheck('Login.tsx maintains OAuth loading and error states', () => {
+  assert(loginSrc.includes('googleLoading'), 'Must track googleLoading state');
+  assert(loginSrc.includes('Redirecting to Google...'), 'Must show loading indicator while redirecting');
+  assert(loginSrc.includes('oauthError.message') || loginSrc.includes('oauthError'), 'Must handle oauthError');
+});
+
+// 2. Navigation cleanup verification in App.tsx
+const appSrc = fs.readFileSync(appSrcPath, 'utf8');
+
+runCheck('App.tsx redirects legacy email auth routes to /login', () => {
   assert(
-    loginSrc.includes('Already have an email/password account?'),
-    'Must label section "Already have an email/password account?"'
+    appSrc.includes('path="/signup"') && appSrc.includes('to="/login"'),
+    'App.tsx must redirect /signup to /login'
+  );
+  assert(
+    appSrc.includes('path="/forgot-password"') && appSrc.includes('to="/login"'),
+    'App.tsx must redirect /forgot-password to /login'
+  );
+  assert(
+    appSrc.includes('path="/reset-password"') && appSrc.includes('to="/login"'),
+    'App.tsx must redirect /reset-password to /login'
   );
 });
 
-runCheck('Login.tsx maintains email/password form inputs, validation, and submit button', () => {
-  assert(loginSrc.includes('type="email"'), 'Must have email input');
-  assert(loginSrc.includes('type="password"'), 'Must have password input');
-  assert(loginSrc.includes('type="submit"'), 'Must have submit button');
-  assert(loginSrc.includes('Sign in'), 'Submit button text must be "Sign in"');
-  assert(loginSrc.includes('Forgot password?'), 'Must retain Forgot password link');
-  assert(loginSrc.includes('onSubmit={handleSubmit}'), 'Form must use handleSubmit');
-  assert(loginSrc.includes('signIn(email.trim(), password)'), 'Must call signIn with email and password');
-});
-
-runCheck('Login.tsx does NOT advertise email/password registration or add email signup form', () => {
-  assert(!loginSrc.includes('/signup'), 'Must not link to /signup');
-  assert(!/create.*email account/i.test(loginSrc), 'Must not offer email account creation');
-  assert(!/sign up with email/i.test(loginSrc), 'Must not offer email signup');
-});
-
-// 2. Verification of first-time Google user onboarding redirection
+// 3. Verification of display-name onboarding redirection
 const protectedRouteSrc = fs.readFileSync(protectedRouteSrcPath, 'utf8');
 
 runCheck('ProtectedRoute directs first-time Google users without display_name to OnboardingScreen', () => {
@@ -93,7 +121,7 @@ runCheck('ProtectedRoute directs first-time Google users without display_name to
   );
 });
 
-// 3. Authenticated test with Supabase credentials if available
+// 4. Authenticated data & session test with Supabase credentials
 async function runAuthCheck() {
   if (!fs.existsSync(envPath)) return;
 
@@ -121,13 +149,23 @@ async function runAuthCheck() {
         email: userA_email,
         password: userA_pass,
       });
-      assert(!error, `Failed to sign in existing email user: ${error?.message}`);
-      assert(data.user, 'User object returned for existing email/password account');
-      results.passed.push(`Existing email/password user (${userA_email}) signs in successfully`);
-      console.log(`✔ Passed: Existing email/password user (${userA_email}) signs in successfully.`);
+      assert(!error, `Failed to sign in User A: ${error?.message}`);
+      assert(data.user, 'User object returned');
+      assert(data.user.user_metadata?.display_name === 'Ryan', 'Existing user data/display_name preserved');
+
+      // Verify user's application data remains intact in Supabase
+      const { data: apps, error: appsError } = await supabase
+        .from('applications')
+        .select('id, company, position')
+        .eq('user_id', data.user.id);
+
+      assert(!appsError, `Failed to query applications: ${appsError?.message}`);
+      assert(Array.isArray(apps), 'Applications array returned');
+      results.passed.push(`Existing user data and ${apps.length} applications remain intact in database`);
+      console.log(`✔ Passed: Existing user (${userA_email}) display_name and ${apps.length} applications remain intact in Supabase.`);
     } catch (err) {
-      results.failed.push(`Existing email login test failed: ${err.message}`);
-      console.error(`❌ Failed: Existing email login check - ${err.message}`);
+      results.failed.push(`Existing data check failed: ${err.message}`);
+      console.error(`❌ Failed: Existing data check - ${err.message}`);
     }
   }
 }

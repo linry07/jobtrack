@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
   FileText,
   Users,
@@ -14,7 +15,6 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-import { monthlyStats } from '../data/sampleData';
 import { useJobTrack } from '../context/JobTrackContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -43,11 +43,16 @@ export default function Dashboard() {
   const offers = applications.filter((a) => a.status === 'offer').length;
   const responseRate = totalApps > 0 ? Math.round(((interviews + offers) / totalApps) * 100) : 0;
 
+  // Real current month stats
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const appsThisMonth = applications.filter((a) => a.appliedDate?.startsWith(currentMonthKey)).length;
+
   const stats = [
     {
       label: 'Total Applications',
       value: totalApps,
-      change: '+3 this month',
+      change: totalApps === 0 ? 'No applications yet' : appsThisMonth > 0 ? `+${appsThisMonth} this month` : '0 added this month',
       icon: FileText,
       iconBg: 'bg-blue-50',
       iconColor: 'text-blue-600',
@@ -55,7 +60,7 @@ export default function Dashboard() {
     {
       label: 'Interviews',
       value: interviews,
-      change: '+2 this month',
+      change: totalApps === 0 ? 'No interviews yet' : interviews > 0 ? `${interviews} in progress` : '0 in progress',
       icon: Users,
       iconBg: 'bg-amber-50',
       iconColor: 'text-amber-600',
@@ -63,7 +68,7 @@ export default function Dashboard() {
     {
       label: 'Offers',
       value: offers,
-      change: '+1 this month',
+      change: totalApps === 0 ? 'No offers yet' : offers > 0 ? `${offers} received` : '0 received',
       icon: Trophy,
       iconBg: 'bg-emerald-50',
       iconColor: 'text-emerald-600',
@@ -71,12 +76,40 @@ export default function Dashboard() {
     {
       label: 'Response Rate',
       value: `${responseRate}%`,
-      change: '+5% vs last month',
+      change: totalApps === 0 ? 'No responses yet' : `${interviews + offers} of ${totalApps} responded`,
       icon: TrendingUp,
       iconBg: 'bg-purple-50',
       iconColor: 'text-purple-600',
     },
   ];
+
+  // Dynamic monthly application trends computed from authenticated user's real applications
+  const monthlyTrends = useMemo(() => {
+    if (applications.length === 0) return [];
+
+    const months: { month: string; key: string; applied: number; interviews: number }[] = [];
+    const currentDate = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+      const month = d.toLocaleString('en-US', { month: 'short' });
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      months.push({ month, key, applied: 0, interviews: 0 });
+    }
+
+    applications.forEach((app) => {
+      if (!app.appliedDate) return;
+      const key = app.appliedDate.slice(0, 7);
+      const match = months.find((m) => m.key === key);
+      if (match) {
+        match.applied += 1;
+        if (app.status === 'interviewing' || app.status === 'offer') {
+          match.interviews += 1;
+        }
+      }
+    });
+
+    return months;
+  }, [applications]);
 
   return (
     <div className="animate-fade-in">
@@ -103,7 +136,9 @@ export default function Dashboard() {
             </div>
             <p className="text-sm font-medium text-slate-500">{stat.label}</p>
             <p className="text-2xl font-bold text-slate-900 mt-0.5">{stat.value}</p>
-            <p className="text-xs text-emerald-600 mt-1.5 font-medium">{stat.change}</p>
+            <p className={`text-xs mt-1.5 font-medium ${totalApps === 0 ? 'text-slate-400' : 'text-emerald-600'}`}>
+              {stat.change}
+            </p>
           </div>
         ))}
       </div>
@@ -116,54 +151,67 @@ export default function Dashboard() {
             <BarChart3 className="w-4.5 h-4.5 text-slate-400" />
             <h2 className="text-sm font-semibold text-slate-900">Application Trends</h2>
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={monthlyStats} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorApplied" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.15} />
-                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="month"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 12, fill: '#94a3b8' }}
-              />
-              <YAxis
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 12, fill: '#94a3b8' }}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: '#fff',
-                  border: 'none',
-                  borderRadius: '12px',
-                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
-                  padding: '10px 14px',
-                  fontSize: '13px',
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="applied"
-                stroke="#6366f1"
-                strokeWidth={2}
-                fill="url(#colorApplied)"
-                name="Applied"
-              />
-              <Area
-                type="monotone"
-                dataKey="interviews"
-                stroke="#f59e0b"
-                strokeWidth={2}
-                fill="transparent"
-                strokeDasharray="5 5"
-                name="Interviews"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {totalApps === 0 ? (
+            <div className="h-[280px] flex flex-col items-center justify-center text-center p-6">
+              <div className="w-12 h-12 bg-slate-50 border border-slate-100 rounded-xl flex items-center justify-center text-slate-400 mb-3">
+                <BarChart3 className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-semibold text-slate-800">No application trends yet</p>
+              <p className="text-xs text-slate-500 max-w-xs mt-1">
+                Your application volume and interview trends over time will appear here once you track your applications.
+              </p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart data={monthlyTrends} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorApplied" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.15} />
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="month"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 12, fill: '#94a3b8' }}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 12, fill: '#94a3b8' }}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#fff',
+                    border: 'none',
+                    borderRadius: '12px',
+                    boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="applied"
+                  stroke="#6366f1"
+                  strokeWidth={2}
+                  fill="url(#colorApplied)"
+                  name="Applied"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="interviews"
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  fill="transparent"
+                  strokeDasharray="5 5"
+                  name="Interviews"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         {/* Recent Activity */}

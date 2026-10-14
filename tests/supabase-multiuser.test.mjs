@@ -99,6 +99,13 @@ async function run() {
         email: userA_email,
         password: userA_pass,
       });
+      if (aError?.code === 'email_provider_disabled' || bError?.code === 'email_provider_disabled') {
+        console.log('ℹ Notice: Email logins are disabled in Supabase (Google-only authentication is active).');
+        console.log('ℹ Skipping password-based multi-user session tests (requires Google OAuth tokens).');
+        results.skipped.push('Requirements 1-5 (Skipped because email logins are disabled in Supabase for Google-only auth)');
+        return;
+      }
+
       if (aError || !aAuth.session) {
         throw new Error(`Authentication failed for User A (${userA_email}): ${aError?.message}`);
       }
@@ -108,6 +115,11 @@ async function run() {
         email: userB_email,
         password: userB_pass,
       });
+      if (bError?.code === 'email_provider_disabled') {
+        console.log('ℹ Notice: Email logins are disabled in Supabase (Google-only authentication is active).');
+        results.skipped.push('Requirements 1-5 (Skipped because email logins are disabled in Supabase for Google-only auth)');
+        return;
+      }
       if (bError || !bAuth.session) {
         throw new Error(`Authentication failed for User B (${userB_email}): ${bError?.message}`);
       }

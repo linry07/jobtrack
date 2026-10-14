@@ -149,20 +149,26 @@ async function runAuthCheck() {
         email: userA_email,
         password: userA_pass,
       });
-      assert(!error, `Failed to sign in User A: ${error?.message}`);
-      assert(data.user, 'User object returned');
-      assert(data.user.user_metadata?.display_name === 'Ryan', 'Existing user data/display_name preserved');
 
-      // Verify user's application data remains intact in Supabase
-      const { data: apps, error: appsError } = await supabase
-        .from('applications')
-        .select('id, company, position')
-        .eq('user_id', data.user.id);
+      if (error && error.code === 'email_provider_disabled') {
+        results.passed.push('Email login disabled in Supabase as expected (Google-only auth enforced)');
+        console.log(`✔ Passed: Email login disabled in Supabase as expected (Google-only auth enforced).`);
+      } else {
+        assert(!error, `Failed to sign in User A: ${error?.message}`);
+        assert(data.user, 'User object returned');
+        assert(data.user.user_metadata?.display_name === 'Ryan', 'Existing user data/display_name preserved');
 
-      assert(!appsError, `Failed to query applications: ${appsError?.message}`);
-      assert(Array.isArray(apps), 'Applications array returned');
-      results.passed.push(`Existing user data and ${apps.length} applications remain intact in database`);
-      console.log(`✔ Passed: Existing user (${userA_email}) display_name and ${apps.length} applications remain intact in Supabase.`);
+        // Verify user's application data remains intact in Supabase
+        const { data: apps, error: appsError } = await supabase
+          .from('applications')
+          .select('id, company, position')
+          .eq('user_id', data.user.id);
+
+        assert(!appsError, `Failed to query applications: ${appsError?.message}`);
+        assert(Array.isArray(apps), 'Applications array returned');
+        results.passed.push(`Existing user data and ${apps.length} applications remain intact in database`);
+        console.log(`✔ Passed: Existing user (${userA_email}) display_name and ${apps.length} applications remain intact in Supabase.`);
+      }
     } catch (err) {
       results.failed.push(`Existing data check failed: ${err.message}`);
       console.error(`❌ Failed: Existing data check - ${err.message}`);

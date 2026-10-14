@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Application, Activity, ApplicationStatus } from '../types';
-import { sampleApplications, sampleActivities } from '../data/sampleData';
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabase';
 import { MigrationModal } from '../components/common/MigrationModal';
@@ -135,7 +134,7 @@ export const JobTrackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             const parsedActs = JSON.parse(savedActs);
             if (Array.isArray(parsedActs)) setActivities(parsedActs);
           } else {
-            setActivities(sampleActivities);
+            setActivities([]);
           }
           setLoading(false);
           return;
@@ -144,9 +143,9 @@ export const JobTrackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch (e) {
       console.error('Failed to load local data:', e);
     }
-    // Only load sample data if user has never saved any applications
-    setApplications(sampleApplications);
-    setActivities(sampleActivities);
+    // New accounts / unconfigured storage start completely empty
+    setApplications([]);
+    setActivities([]);
     setLoading(false);
   }, []);
 
@@ -162,15 +161,8 @@ export const JobTrackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const parsed = JSON.parse(savedApps);
       if (!Array.isArray(parsed) || parsed.length === 0) return;
 
-      // Ensure we don't migrate sample data as real user data
-      const isSampleData = parsed.length === sampleApplications.length &&
-        parsed[0]?.company === sampleApplications[0]?.company &&
-        parsed[1]?.company === sampleApplications[1]?.company;
-
-      if (!isSampleData) {
-        setLocalAppsToMigrate(parsed);
-        setShowMigrationModal(true);
-      }
+      setLocalAppsToMigrate(parsed);
+      setShowMigrationModal(true);
     } catch (e) {
       console.error('Failed to check migration opportunity:', e);
     }

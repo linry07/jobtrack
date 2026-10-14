@@ -25,7 +25,7 @@ import {
 import { useJobTrack } from '../context/JobTrackContext';
 
 export default function Analytics() {
-  const { applications } = useJobTrack();
+  const { applications, activities } = useJobTrack();
   const [animateFunnel, setAnimateFunnel] = useState(false);
 
   useEffect(() => {
@@ -111,25 +111,48 @@ export default function Analytics() {
     return active && active.applied > 0 ? active : null;
   }, [applications.length, monthlyStats]);
 
-  // Real average response time in days between appliedDate and response
-  const avgResponseDays = useMemo(() => {
-    const respondedApps = applications.filter((a) => a.status !== 'saved' && a.status !== 'applied' && a.appliedDate);
-    if (respondedApps.length === 0) return null;
+  // Real average response time in days based on verified employer response activity dates.
+  // Ordinary application edits (e.g. notes or salary changes) do NOT count as responses.
+  const responseMetrics = useMemo(() => {
+    const respondedApps = applications.filter(
+      (a) => a.status !== 'saved' && a.status !== 'applied' && a.appliedDate
+    );
+    if (respondedApps.length === 0) return { avgDays: null, count: 0 };
 
     let totalDiff = 0;
     let count = 0;
+
     respondedApps.forEach((app) => {
-      const start = new Date(app.appliedDate).getTime();
-      const end = new Date(app.lastUpdated || app.appliedDate).getTime();
-      if (!isNaN(start) && !isNaN(end) && end >= start) {
-        const days = Math.round((end - start) / (1000 * 60 * 60 * 24));
-        totalDiff += days;
-        count += 1;
+      // Find authentic response activity records for this application
+      const responseActs = activities
+        .filter((act) => {
+          if (act.applicationId !== app.id) return false;
+          if (act.type === 'interview') return true;
+          const actionLower = act.action.toLowerCase();
+          return (
+            actionLower.includes('interview') ||
+            actionLower.includes('offer') ||
+            actionLower.includes('rejected')
+          );
+        })
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+      if (responseActs.length > 0) {
+        const start = new Date(app.appliedDate).getTime();
+        const end = new Date(responseActs[0].date).getTime();
+        if (!isNaN(start) && !isNaN(end) && end >= start) {
+          const days = Math.round((end - start) / (1000 * 60 * 60 * 24));
+          totalDiff += days;
+          count += 1;
+        }
       }
     });
 
-    return count > 0 ? Math.round(totalDiff / count) : null;
-  }, [applications]);
+    return {
+      avgDays: count > 0 ? Math.round(totalDiff / count) : null,
+      count,
+    };
+  }, [applications, activities]);
 
   return (
     <div className="animate-fade-in">
@@ -144,13 +167,15 @@ export default function Analytics() {
         {[
           {
             label: 'Avg. Response Time',
-            value: avgResponseDays !== null ? `~${avgResponseDays} day${avgResponseDays === 1 ? '' : 's'}` : '—',
+            value: responseMetrics.avgDays !== null
+              ? `~${responseMetrics.avgDays} day${responseMetrics.avgDays === 1 ? '' : 's'}`
+              : 'N/A',
             icon: Clock,
             iconBg: 'bg-blue-50',
             iconColor: 'text-blue-600',
-            sub: avgResponseDays !== null
-              ? `Based on ${responded} responded application${responded === 1 ? '' : 's'}`
-              : 'No responses yet',
+            sub: responseMetrics.avgDays !== null
+              ? `Based on ${responseMetrics.count} recorded response${responseMetrics.count === 1 ? '' : 's'}`
+              : (responded > 0 ? 'No response dates recorded' : 'No responses yet'),
           },
           {
             label: 'Success Rate',

@@ -182,45 +182,141 @@ test('Adding and updating applications dynamically recalculates statistics', () 
   assert.strictEqual(applications[0].company, 'Stripe');
 });
 
-test('Average response time calculation works accurately on real dates', () => {
+test('Average response time calculation uses verified response activities and ignores ordinary edits', () => {
   const applications = [
     {
       id: 'app-1',
       status: 'interviewing',
-      appliedDate: '2026-10-01T00:00:00Z',
-      lastUpdated: '2026-10-08T00:00:00Z', // 7 days
+      appliedDate: '2026-10-01',
+      lastUpdated: '2026-10-14', // ordinary edit days later
     },
     {
       id: 'app-2',
       status: 'rejected',
-      appliedDate: '2026-10-01T00:00:00Z',
-      lastUpdated: '2026-10-11T00:00:00Z', // 10 days
+      appliedDate: '2026-10-01',
+      lastUpdated: '2026-10-12', // ordinary edit days later
     },
     {
       id: 'app-3',
       status: 'applied', // not responded
-      appliedDate: '2026-10-05T00:00:00Z',
-      lastUpdated: '2026-10-05T00:00:00Z',
+      appliedDate: '2026-10-05',
+      lastUpdated: '2026-10-05',
+    },
+    {
+      id: 'app-4',
+      status: 'interviewing', // responded, but NO recorded response activity
+      appliedDate: '2026-10-03',
+      lastUpdated: '2026-10-10', // ordinary edit
     },
   ];
 
+  // Activities: Only app-1 and app-2 have confirmed response events
+  const activities = [
+    {
+      id: 'act-1',
+      applicationId: 'app-1',
+      action: 'Moved to interviewing stage',
+      type: 'interview',
+      date: '2026-10-08', // 7 days after appliedDate (2026-10-01)
+    },
+    {
+      id: 'act-2',
+      applicationId: 'app-2',
+      action: 'Application status updated to rejected',
+      type: 'status_change',
+      date: '2026-10-11', // 10 days after appliedDate (2026-10-01)
+    },
+    {
+      id: 'act-3',
+      applicationId: 'app-4',
+      action: 'Updated salary note', // ordinary note edit, NOT a response
+      type: 'note',
+      date: '2026-10-10',
+    },
+  ];
+
+  const isResponseActivity = (act) => {
+    if (act.type === 'interview') return true;
+    const actionLower = act.action.toLowerCase();
+    return (
+      actionLower.includes('interview') ||
+      actionLower.includes('offer') ||
+      actionLower.includes('rejected')
+    );
+  };
+
   const respondedApps = applications.filter((a) => a.status !== 'saved' && a.status !== 'applied' && a.appliedDate);
-  assert.strictEqual(respondedApps.length, 2);
+  assert.strictEqual(respondedApps.length, 3); // app-1, app-2, app-4
 
   let totalDiff = 0;
   let count = 0;
+
   respondedApps.forEach((app) => {
-    const start = new Date(app.appliedDate).getTime();
-    const end = new Date(app.lastUpdated || app.appliedDate).getTime();
-    if (!isNaN(start) && !isNaN(end) && end >= start) {
-      const days = Math.round((end - start) / (1000 * 60 * 60 * 24));
-      totalDiff += days;
-      count += 1;
+    const responseActs = activities
+      .filter((act) => act.applicationId === app.id && isResponseActivity(act))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (responseActs.length > 0) {
+      const start = new Date(app.appliedDate).getTime();
+      const end = new Date(responseActs[0].date).getTime();
+      if (!isNaN(start) && !isNaN(end) && end >= start) {
+        const days = Math.round((end - start) / (1000 * 60 * 60 * 24));
+        totalDiff += days;
+        count += 1;
+      }
     }
   });
 
   const avgDays = count > 0 ? Math.round(totalDiff / count) : null;
-  assert.strictEqual(avgDays, 9); // (7 + 10) / 2 = 8.5 -> 9
+  // app-1 was 7 days (2026-10-08 - 2026-10-01)
+  // app-2 was 10 days (2026-10-11 - 2026-10-01)
+  // app-4 had no response activity, so ignored (instead of falsely using lastUpdated: 2026-10-10)
+  // (7 + 10) / 2 = 8.5 -> 9
+  assert.strictEqual(count, 2);
+  assert.strictEqual(avgDays, 9);
+});
+
+test('Ordinary edits without response activities yield N/A for average response time', () => {
+  const applications = [
+    {
+      id: 'app-1',
+      status: 'interviewing',
+      appliedDate: '2026-10-01',
+      lastUpdated: '2026-10-14',
+    },
+  ];
+
+  // Activities contains only notes/edits, no response activities
+  const activities = [
+    {
+      id: 'act-1',
+      applicationId: 'app-1',
+      action: 'Updated contact person',
+      type: 'note',
+      date: '2026-10-14',
+    },
+  ];
+
+  const isResponseActivity = (act) => {
+    if (act.type === 'interview') return true;
+    const actionLower = act.action.toLowerCase();
+    return (
+      actionLower.includes('interview') ||
+      actionLower.includes('offer') ||
+      actionLower.includes('rejected')
+    );
+  };
+
+  const respondedApps = applications.filter((a) => a.status !== 'saved' && a.status !== 'applied' && a.appliedDate);
+  let count = 0;
+  respondedApps.forEach((app) => {
+    const responseActs = activities
+      .filter((act) => act.applicationId === app.id && isResponseActivity(act));
+    if (responseActs.length > 0) count++;
+  });
+
+  const avgDays = count > 0 ? 10 : null;
+  assert.strictEqual(avgDays, null); // displays N/A
 });
 
 console.log('\n================================================================');

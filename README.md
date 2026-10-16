@@ -1,94 +1,105 @@
 # JobTrack 💼
 
-A modern, polished job application tracking web app inspired by Linear and Notion. Built with React, TypeScript, and Tailwind CSS.
+**A full-stack web app for organizing job applications and tracking job-search progress.**
 
-![JobTrack Interface Preview](https://raw.githubusercontent.com/linry07/jobtrack/main/public/vite.svg) <!-- optional banner/screenshot placeholder -->
+JobTrack brings applications, interview stages, and job-search analytics into one place. Instead of relying on spreadsheets, users can manage their pipeline with a Kanban board, import details from job postings, and monitor progress with charts built from their own data.
 
----
+**[Live Demo](https://jobtrack-xi-indol.vercel.app/)** · **[GitHub Repository](https://github.com/linry07/jobtrack)**
 
-## ✨ Features
+## Features
 
-- **📊 Overview Dashboard:** Key application metrics (Total, Interviews, Offers, Response Rate), visual monthly trends via Recharts, and a real-time activity feed.
-- **📋 Kanban Pipeline Board:** Interactive drag-and-drop board organized across 5 stages:
-  - `Saved`
-  - `Applied`
-  - `Interviewing`
-  - `Offer`
-  - `Rejected`
-- **📈 Comprehensive Analytics:**
-  - Applications over time (bar chart)
-  - Status distribution breakdown (donut chart)
-  - Historical response rate trend (area chart)
-  - 4-stage visual conversion funnel
-- **⚡ Interactive Actions:** Add applications through a modal dialog, inspect cards with contact details, notes, and compensation, or delete entries.
-- **💾 LocalStorage Persistence:** Automatically preserves all changes (additions, deletions, stage moves) across routes and page refreshes.
-- **📱 Responsive UI/UX:** Clean typography (Inter), subtle borders, restrained indigo accents, and full desktop/mobile layout adaptability.
+- **Application tracking:** Add, edit, and delete applications; organize them in a drag-and-drop Kanban board across Saved, Applied, Interviewing, Offer, and Rejected stages.
+- **Smart Job Import:** Paste a job posting URL to prefill available details such as company, position, and location, then review and edit the results before saving.
+- **Google authentication:** Sign in with Google through Supabase Auth. New users can choose a display name during first-time onboarding.
+- **Cloud persistence and account isolation:** Store application and activity records in Supabase PostgreSQL, with Row Level Security (RLS) limiting access to each user's records.
+- **Dashboard and analytics:** Explore application volume, status distribution, response trends, and pipeline progress using interactive charts based on actual application and activity data. Empty accounts show meaningful empty states rather than sample statistics.
+- **Responsive interface:** Manage applications on desktop or mobile.
 
----
+## Tech Stack
 
-## 🛠️ Tech Stack
+| Layer | Technologies |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, Tailwind CSS |
+| Routing and UI | React Router, Recharts, Lucide React |
+| Authentication | Supabase Auth, Google OAuth |
+| Database | Supabase PostgreSQL, Row Level Security |
+| Job import | Server-side API endpoints deployed with Vercel |
+| Deployment | Vercel |
 
-- **Framework:** [React 18](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
-- **Build Tool:** [Vite](https://vitejs.dev/)
-- **Styling:** [Tailwind CSS](https://tailwindcss.com/)
-- **Routing:** [React Router v7](https://reactrouter.com/)
-- **Charts:** [Recharts](https://recharts.org/)
-- **Icons:** [Lucide React](https://lucide.dev/)
+## How It Works
 
----
+1. **Authenticate:** Google sign-in creates or restores a Supabase Auth session. First-time users select a display name.
+2. **Track applications:** The frontend reads and updates applications and activity history in Supabase; database RLS restricts access to the authenticated user.
+3. **Import job details:** The user submits a job posting URL, reviews the extracted fields, and decides what to save. Extraction can vary by job site, so manual editing is supported.
+4. **Analyze progress:** Dashboard and Analytics views compute summaries and charts from stored records. Response-time metrics use recorded response milestones when available rather than treating ordinary edits as employer responses.
 
-## 🚀 Getting Started
+## Running Locally
 
-### 1. Clone the repository
+### Prerequisites
+
+- Node.js and npm
+- A Supabase project
+- Google OAuth credentials configured for your Supabase project if you want to test Google sign-in
+
+### Install
+
 ```bash
-git clone git@github.com:linry07/jobtrack.git
+git clone https://github.com/linry07/jobtrack.git
 cd jobtrack
-```
-
-### 2. Install dependencies
-```bash
 npm install
 ```
 
-### 3. Start local development server
+### Configure environment variables
+
+Create a `.env.local` file in the project root using the variable names in `.env.example`:
+
+```dotenv
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your_supabase_publishable_or_anon_key
+```
+
+Use a Supabase **publishable/anon key**, not a secret or `service_role` key. Never commit `.env.local` or any private credentials.
+
+Apply the project database schema from `supabase/migrations` to your Supabase project. In Supabase Authentication settings, enable and configure Google sign-in and allow your local redirect URL (typically `http://localhost:5173/**`). Your Google OAuth client must use the callback URL shown by Supabase.
+
+### Start the app
+
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open the local address printed by Vite (typically `http://localhost:5173`).
 
-### 4. Build for production
+## Testing and Build
+
 ```bash
+npm test
+npm run test:sample-data
+node tests/display-name.test.mjs
+node tests/login-auth-options.test.mjs
 npm run build
 ```
 
----
+The project includes regression checks for Smart Job Import, user onboarding, login-page behavior, and data-driven analytics. Some integration or multi-user security checks require separately configured test credentials; see the relevant test scripts before running them.
 
-## 📁 Project Structure
+## Project Structure
 
-```
+```text
+api/                  Server-side job-import endpoints
 src/
-├── components/
-│   └── layout/
-│       ├── Layout.tsx         # Main responsive shell
-│       └── Sidebar.tsx        # Linear-style sidebar & mobile menu
-├── context/
-│   └── JobTrackContext.tsx    # Central state & localStorage syncing
-├── data/
-│   └── sampleData.ts          # Realistic initial sample data
-├── pages/
-│   ├── Dashboard.tsx          # Key metrics, trends, recent activity
-│   ├── Applications.tsx       # Drag-and-drop Kanban board & modals
-│   └── Analytics.tsx          # Recharts visualizations & funnel
-├── types/
-│   └── index.ts               # Core TypeScript definitions
-├── App.tsx                    # Route definitions
-├── index.css                  # Global Tailwind & Inter font setup
-└── main.tsx                   # App entrypoint
+  components/         Shared UI and authentication components
+  context/            Authentication and application state
+  pages/              Dashboard, Applications, Analytics, and login views
+  types/              Shared TypeScript definitions
+supabase/migrations/  Database schema and access policies
+tests/                Regression and integration tests
 ```
+
+## Notes
+
+- Job Import results depend on the structure and accessibility of each job posting; all imported fields can be reviewed before an application is saved.
+- Application and analytics data is specific to the signed-in user. Newly created accounts do not start with seeded demo applications.
 
 ---
 
-## 📄 License
-
-MIT
+Built as a project exploring full-stack development, authentication, database security, and data visualization.

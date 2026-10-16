@@ -5,7 +5,14 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createClient } from '@supabase/supabase-js';
+// @ts-ignore
+import WebSocket from 'ws';
+
+if (!(globalThis as any).WebSocket) {
+  (globalThis as any).WebSocket = WebSocket;
+}
 
 // ============================================================================
 // 1. SSRF & Security Protections
@@ -202,11 +209,17 @@ export function checkRateLimit(identifier: string): { allowed: boolean; remainin
   return { allowed: true, remaining: MAX_REQUESTS_PER_WINDOW - entry.count };
 }
 
-// Robust Safe Fetch with IP Pinning (Zero DNS Rebinding TOCTOU) and Manual Redirect Validation
+export interface SafeFetchResult {
+  body?: string;
+  finalUrl?: string;
+  errorStatus?: number;
+}
+
+// Robust Safe Fetch with IP Pinning (Zero DNS Rebinding TOCTOU), Multi-IP Fallback, and Decompression
 export async function safeFetchHtml(
   inputUrl: string,
   maxRedirects = 5
-): Promise<{ body: string; finalUrl: string }> {
+): Promise<SafeFetchResult> {
   let currentUrlStr = inputUrl;
   let redirectCount = 0;
 
@@ -249,107 +262,161 @@ export async function safeFetchHtml(
       throw new Error(`Could not resolve host ${parsedUrl.hostname}.`);
     }
 
+    // SSRF Guard: Reject entire request immediately if ANY resolved address is private or reserved
     for (const entry of resolvedAddresses) {
       if (isPrivateOrReservedIp(entry.address)) {
         throw new Error('Host resolves to a private or reserved network address.');
       }
     }
 
-    // Select the first validated public IP address
-    const targetIpEntry = resolvedAddresses[0];
+    // Sort IP addresses: Prefer IPv4 first (for serverless environments with IPv4 egress), then IPv6
+    const sortedAddresses = [
+      ...resolvedAddresses.filter((a) => a.family === 4),
+      ...resolvedAddresses.filter((a) => a.family === 6),
+    ];
 
-    // Perform HTTP request with destination IP pinning to prevent DNS rebinding
     const requestLib = isHttps ? https : http;
-    const responseData = await new Promise<{ isRedirect: boolean; nextUrl?: string; body?: string }>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        req.destroy(new Error('Request timed out while fetching the job posting.'));
-      }, 8000);
+    let successfulResponse: {
+      isRedirect: boolean;
+      nextUrl?: string;
+      body?: string;
+      errorStatus?: number;
+    } | null = null;
+    let lastError: any = null;
 
-      const options = {
-        hostname: parsedUrl.hostname,
-        port,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'GET',
-        headers: {
-          Host: parsedUrl.host,
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (JobTrack/1.0 JobBot)',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          Connection: 'close',
-        },
-        servername: parsedUrl.hostname, // Crucial for TLS SNI and certificate validation
-        lookup: (_hostname: string, _opts: any, callback: any) => {
-          // Pin to the validated IP so no secondary DNS resolution can be re-bound
-          callback(null, targetIpEntry.address, targetIpEntry.family);
-        },
-      };
+    // Multi-IP fallback loop: Try valid public IP addresses in order until one connects
+    for (const targetIpEntry of sortedAddresses) {
+      try {
+        const responseData = await new Promise<{
+          isRedirect: boolean;
+          nextUrl?: string;
+          body?: string;
+          errorStatus?: number;
+        }>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            req.destroy(new Error('Request timed out while fetching the job posting.'));
+          }, 8000);
 
-      const req = requestLib.request(options, (res) => {
-        clearTimeout(timeout);
+          const options = {
+            hostname: parsedUrl.hostname,
+            port,
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: 'GET',
+            headers: {
+              Host: parsedUrl.host,
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (JobTrack/1.0 JobBot)',
+              Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Accept-Encoding': 'gzip, deflate, br',
+              Connection: 'close',
+            },
+            servername: parsedUrl.hostname, // Crucial for TLS SNI and certificate validation
+            lookup: (_hostname: string, optsOrCb: any, maybeCb?: any) => {
+              // Pin to the validated IP to defeat DNS rebinding TOCTOU
+              const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+              cb(null, targetIpEntry.address, targetIpEntry.family);
+            },
+          };
 
-        // Pre-validate Redirects before following
-        if ([301, 302, 303, 307, 308].includes(res.statusCode || 0)) {
-          const location = res.headers.location;
-          res.resume();
-          if (!location) {
-            return reject(new Error('Redirect missing location header.'));
-          }
-          try {
-            const redirectUrl = new URL(location, currentUrlStr);
-            return resolve({ isRedirect: true, nextUrl: redirectUrl.toString() });
-          } catch {
-            return reject(new Error('Invalid redirect target URL.'));
-          }
-        }
+          const req = requestLib.request(options, (res) => {
+            clearTimeout(timeout);
 
-        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
-          res.resume();
-          return reject(
-            new Error(`Website responded with HTTP status ${res.statusCode}.`)
-          );
-        }
+            // 1. Pre-validate Redirects before following
+            if ([301, 302, 303, 307, 308].includes(res.statusCode || 0)) {
+              const location = res.headers.location;
+              res.resume();
+              if (!location) {
+                return reject(new Error('Redirect missing location header.'));
+              }
+              try {
+                const redirectUrl = new URL(location, currentUrlStr);
+                return resolve({ isRedirect: true, nextUrl: redirectUrl.toString() });
+              } catch {
+                return reject(new Error('Invalid redirect target URL.'));
+              }
+            }
 
-        const contentType = res.headers['content-type'] || '';
-        if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-          res.resume();
-          return reject(new Error('The provided URL does not return an HTML web page.'));
-        }
+            // 2. Handle HTTP Errors (e.g. 403 Forbidden, 404 Not Found, 429 Too Many Requests)
+            if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+              res.resume();
+              return resolve({ isRedirect: false, errorStatus: res.statusCode });
+            }
 
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        const MAX_BYTES = 3 * 1024 * 1024;
+            // 3. Verify Content-Type
+            const contentType = res.headers['content-type'] || '';
+            if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+              res.resume();
+              return reject(new Error('The provided URL does not return an HTML web page.'));
+            }
 
-        res.on('data', (chunk: Buffer) => {
-          totalBytes += chunk.length;
-          if (totalBytes > MAX_BYTES) {
-            req.destroy(new Error('Page content exceeded the maximum allowed size (3MB).'));
-            return;
-          }
-          chunks.push(chunk);
+            // 4. Stream response and decompress if encoded
+            let stream: NodeJS.ReadableStream = res;
+            const contentEncoding = (res.headers['content-encoding'] || '').toLowerCase();
+            if (contentEncoding === 'gzip') {
+              stream = res.pipe(zlib.createGunzip());
+            } else if (contentEncoding === 'deflate') {
+              stream = res.pipe(zlib.createInflate());
+            } else if (contentEncoding === 'br') {
+              stream = res.pipe(zlib.createBrotliDecompress());
+            }
+
+            const chunks: Buffer[] = [];
+            let totalBytes = 0;
+            const MAX_BYTES = 3 * 1024 * 1024;
+
+            stream.on('data', (chunk: Buffer) => {
+              totalBytes += chunk.length;
+              if (totalBytes > MAX_BYTES) {
+                req.destroy(new Error('Page content exceeded the maximum allowed size (3MB).'));
+                return;
+              }
+              chunks.push(chunk);
+            });
+
+            stream.on('end', () => {
+              const body = Buffer.concat(chunks).toString('utf-8');
+              resolve({ isRedirect: false, body });
+            });
+
+            stream.on('error', (err) => {
+              reject(err);
+            });
+          });
+
+          req.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+
+          req.end();
         });
 
-        res.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf-8');
-          resolve({ isRedirect: false, body });
-        });
-      });
+        successfulResponse = responseData;
+        break; // Successfully connected and received response
+      } catch (err: any) {
+        lastError = err;
+        console.warn(
+          `[Smart Job Import] Connection to ${parsedUrl.hostname} via ${targetIpEntry.address} failed: ${err?.code || err?.message || 'Error'}. Trying next IP...`
+        );
+      }
+    }
 
-      req.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
+    if (!successfulResponse) {
+      throw lastError || new Error(`Unable to establish connection to ${parsedUrl.hostname}.`);
+    }
 
-      req.end();
-    });
-
-    if (responseData.isRedirect && responseData.nextUrl) {
+    if (successfulResponse.isRedirect && successfulResponse.nextUrl) {
       redirectCount++;
-      currentUrlStr = responseData.nextUrl;
+      currentUrlStr = successfulResponse.nextUrl;
       continue;
     }
 
-    return { body: responseData.body || '', finalUrl: currentUrlStr };
+    if (successfulResponse.errorStatus) {
+      return { errorStatus: successfulResponse.errorStatus, finalUrl: currentUrlStr };
+    }
+
+    return { body: successfulResponse.body || '', finalUrl: currentUrlStr };
   }
 
   throw new Error('Too many redirects followed.');
@@ -1001,30 +1068,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const { url: supabaseUrl, anonKey: supabaseAnonKey } = getSupabaseCredentials();
-  let userId = 'authenticated-user';
 
   if (
-    supabaseUrl &&
-    supabaseAnonKey &&
-    !supabaseUrl.includes('your-project-id') &&
-    !supabaseAnonKey.includes('your-anon-public-key')
+    !supabaseUrl ||
+    !supabaseAnonKey ||
+    supabaseUrl.includes('your-project-id') ||
+    supabaseAnonKey.includes('your-anon-public-key')
   ) {
-    try {
-      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-      const { data, error: authError } = await supabase.auth.getUser(token);
-      if (authError || !data?.user) {
-        return res.status(401).json({
-          error: 'Invalid or expired session. Please sign in again.',
-        });
-      }
-      userId = data.user.id;
-    } catch {
+    console.error('[Smart Job Import] Supabase authentication credentials are not configured in environment.');
+    return res.status(500).json({
+      error: 'Authentication service is not properly configured on the server.',
+    });
+  }
+
+  let userId: string;
+  try {
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !data?.user) {
       return res.status(401).json({
-        error: 'Authentication verification failed. Please sign in again.',
+        error: 'Invalid or expired session. Please sign in again.',
       });
     }
+    userId = data.user.id;
+  } catch (err: any) {
+    console.error('[Smart Job Import] Supabase token verification failed:', err?.message || 'Unknown auth error');
+    return res.status(401).json({
+      error: 'Authentication verification failed. Please sign in again.',
+    });
   }
 
   // 3. In-memory Rate Limiting per User/IP
@@ -1076,12 +1149,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: `Non-standard port ${port} is blocked for security.` });
     }
 
-    // Perform robust SSRF-safe fetch with IP pinning and redirect validation
-    let fetchResult: { body: string; finalUrl: string };
+    // Perform robust SSRF-safe fetch with IP pinning, multi-IP fallback, and redirect validation
+    let fetchResult: SafeFetchResult;
     try {
       fetchResult = await safeFetchHtml(parsedUrl.toString());
     } catch (fetchErr: any) {
       const msg = fetchErr?.message || 'Unable to connect to website.';
+      console.error(`[Smart Job Import] Outbound fetch error for ${parsedUrl.hostname}: ${msg}`);
       if (msg.includes('timed out')) {
         return res.status(504).json({ error: 'Request timed out while fetching the job posting.' });
       }
@@ -1095,12 +1169,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: msg });
       }
       return res.status(502).json({
-        error: 'Unable to access the requested job posting. The website may require login or blocked the request.',
+        error: `Unable to access the requested job posting (${msg}). The website may require login or blocked automated access.`,
       });
     }
 
-    const html = fetchResult.body;
-    const finalParsedUrl = new URL(fetchResult.finalUrl);
+    if (fetchResult.errorStatus) {
+      console.warn(`[Smart Job Import] Remote server ${parsedUrl.hostname} returned HTTP ${fetchResult.errorStatus}`);
+      return res.status(fetchResult.errorStatus).json({
+        error: `Website responded with HTTP status ${fetchResult.errorStatus}. It may require login or blocked automated access.`,
+      });
+    }
+
+    const html = fetchResult.body || '';
+    const finalParsedUrl = new URL(fetchResult.finalUrl || parsedUrl.toString());
 
     // 5. Parse Structured Data JSON-LD
     const jsonLdRegex = /<script\s+[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;

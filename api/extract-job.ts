@@ -312,10 +312,16 @@ export async function safeFetchHtml(
               Connection: 'close',
             },
             servername: parsedUrl.hostname, // Crucial for TLS SNI and certificate validation
+            autoSelectFamily: false, // safeFetchHtml already handles IPv4 preference and multi-IP fallback
             lookup: (_hostname: string, optsOrCb: any, maybeCb?: any) => {
               // Pin to the validated IP to defeat DNS rebinding TOCTOU
               const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
-              cb(null, targetIpEntry.address, targetIpEntry.family);
+              const opts = typeof optsOrCb === 'object' && optsOrCb !== null ? optsOrCb : {};
+              if (opts.all) {
+                cb(null, [{ address: targetIpEntry.address, family: targetIpEntry.family }]);
+              } else {
+                cb(null, targetIpEntry.address, targetIpEntry.family);
+              }
             },
           };
 

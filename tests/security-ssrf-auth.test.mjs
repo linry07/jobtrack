@@ -445,6 +445,118 @@ console.log('================================================================\n'
   console.log('✔ Test 12 passed: Remote HTTP status codes preserved for client feedback');
 }
 
+// ============================================================================
+// 13. Regression: Custom Lookup Callback Handles options.all & Prevents ERR_INVALID_IP_ADDRESS
+// ============================================================================
+{
+  // Spin up an ephemeral local server to test Node's native HTTP client with custom lookup callbacks
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html><body>Regression Test OK</body></html>');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const serverPort = server.address().port;
+
+  // 13a. Catch ERR_INVALID_IP_ADDRESS when a buggy single-address callback is used with autoSelectFamily: true
+  let caughtBuggyError = false;
+  try {
+    await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          host: 'localhost',
+          port: serverPort,
+          autoSelectFamily: true, // Forces Node to call lookup with { all: true }
+          lookup: (_hostname, opts, cb) => {
+            const callback = typeof opts === 'function' ? opts : cb;
+            // Naive single-address callback (causes TypeError [ERR_INVALID_IP_ADDRESS]: Invalid IP address: undefined)
+            callback(null, '127.0.0.1', 4);
+          },
+        },
+        (res) => {
+          res.resume();
+          resolve();
+        }
+      );
+      req.on('error', (err) => {
+        if (err.code === 'ERR_INVALID_IP_ADDRESS') {
+          caughtBuggyError = true;
+          resolve();
+        } else {
+          reject(err);
+        }
+      });
+      req.end();
+    });
+  } catch (err) {
+    // If it threw or rejected
+  }
+  assert(caughtBuggyError, 'Buggy callback without options.all support MUST trigger ERR_INVALID_IP_ADDRESS under Node networking');
+
+  // 13b. Verify the fixed dual-mode lookup callback handles options.all === true without error
+  let fixedWithAutoSelectOk = false;
+  await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: 'localhost',
+        port: serverPort,
+        autoSelectFamily: true,
+        lookup: (_hostname, optsOrCb, maybeCb) => {
+          const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+          const opts = typeof optsOrCb === 'object' && optsOrCb !== null ? optsOrCb : {};
+          if (opts.all) {
+            cb(null, [{ address: '127.0.0.1', family: 4 }]);
+          } else {
+            cb(null, '127.0.0.1', 4);
+          }
+        },
+      },
+      (res) => {
+        assert.strictEqual(res.statusCode, 200);
+        fixedWithAutoSelectOk = true;
+        res.resume();
+        resolve();
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+  assert(fixedWithAutoSelectOk, 'Fixed lookup callback must succeed when Node requests options.all === true');
+
+  // 13c. Verify the fixed dual-mode lookup callback handles autoSelectFamily: false without error
+  let fixedWithoutAutoSelectOk = false;
+  await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: 'localhost',
+        port: serverPort,
+        autoSelectFamily: false,
+        lookup: (_hostname, optsOrCb, maybeCb) => {
+          const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
+          const opts = typeof optsOrCb === 'object' && optsOrCb !== null ? optsOrCb : {};
+          if (opts.all) {
+            cb(null, [{ address: '127.0.0.1', family: 4 }]);
+          } else {
+            cb(null, '127.0.0.1', 4);
+          }
+        },
+      },
+      (res) => {
+        assert.strictEqual(res.statusCode, 200);
+        fixedWithoutAutoSelectOk = true;
+        res.resume();
+        resolve();
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+  assert(fixedWithoutAutoSelectOk, 'Fixed lookup callback must succeed with autoSelectFamily: false');
+
+  server.close();
+  console.log('✔ Test 13 passed: Custom lookup callback handles options.all & eliminates ERR_INVALID_IP_ADDRESS in Node networking APIs');
+}
+
 console.log('\n================================================================');
-console.log('All 12 security & networking regression tests passed successfully! 🎉');
+console.log('All 13 security & networking regression tests passed successfully! 🎉');
 console.log('================================================================\n');

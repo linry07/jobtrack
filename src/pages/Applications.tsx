@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Application, ApplicationStatus } from '../types';
 import { useJobTrack } from '../context/JobTrackContext';
+import { supabase } from '../lib/supabase';
 
 const formatDate = (dateStr: string) => {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -165,13 +166,31 @@ export default function Applications() {
     setExtractSuccess(false);
 
     try {
+      // Ensure we have a valid, active Supabase session token
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) {
+        throw new Error('Please sign in to import job details.');
+      }
+
       const response = await fetch('/api/extract-job', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({ url: jobUrl.trim() }),
       });
 
       const result = await response.json();
+
+      if (response.status === 401) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
+      if (response.status === 429) {
+        throw new Error(result.error || 'Import rate limit reached. Please wait a moment before trying again.');
+      }
 
       if (!response.ok || !result.success) {
         throw new Error(result.error || `Failed to extract job details (${response.status})`);

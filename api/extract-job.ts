@@ -1,44 +1,358 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import http from 'node:http';
+import https from 'node:https';
+import dns from 'node:dns/promises';
+import net from 'node:net';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createClient } from '@supabase/supabase-js';
 
 // ============================================================================
 // 1. SSRF & Security Protections
 // ============================================================================
 
+export function parseIPv6Words(ip: string): number[] {
+  let cleaned = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  let ipv4Part: string | null = null;
+  if (cleaned.includes('.')) {
+    const lastColon = cleaned.lastIndexOf(':');
+    ipv4Part = cleaned.slice(lastColon + 1);
+    cleaned = cleaned.slice(0, lastColon + 1) + '0:0';
+  }
+  let parts = cleaned.split(':');
+  if (cleaned.includes('::')) {
+    const halves = cleaned.split('::');
+    const left = halves[0] ? halves[0].split(':') : [];
+    const right = halves[1] ? halves[1].split(':') : [];
+    const missing = 8 - (left.length + right.length);
+    parts = [...left, ...Array(missing).fill('0'), ...right];
+  }
+  if (ipv4Part) {
+    const octs = ipv4Part.split('.').map(Number);
+    parts[6] = ((octs[0] << 8) | octs[1]).toString(16);
+    parts[7] = ((octs[2] << 8) | octs[3]).toString(16);
+  }
+  return parts.map((p) => parseInt(p || '0', 16));
+}
+
+export function isPrivateOrReservedIpv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((n) => isNaN(n) || n < 0 || n > 255)) {
+    return true; // invalid -> block
+  }
+  const [a, b, c, d] = parts;
+
+  // 0.0.0.0/8 (Current network)
+  if (a === 0) return true;
+  // 10.0.0.0/8 (Private - RFC 1918)
+  if (a === 10) return true;
+  // 100.64.0.0/10 (Shared Address Space / Carrier-Grade NAT - RFC 6598)
+  if (a === 100 && (b & 0xc0) === 64) return true;
+  // 127.0.0.0/8 (Loopback - RFC 1122)
+  if (a === 127) return true;
+  // 169.254.0.0/16 (Link-Local / Cloud Metadata - RFC 3927)
+  if (a === 169 && b === 254) return true;
+  // 172.16.0.0/12 (Private - RFC 1918: 172.16.0.0 - 172.31.255.255)
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  // 192.0.0.0/24 (IETF protocol assignments & Oracle cloud metadata 192.0.0.192)
+  if (a === 192 && b === 0 && c === 0) return true;
+  // 192.0.2.0/24 (TEST-NET-1 - RFC 5737)
+  if (a === 192 && b === 0 && c === 2) return true;
+  // 192.88.99.0/24 (6to4 Relay - RFC 3068)
+  if (a === 192 && b === 88 && c === 99) return true;
+  // 192.168.0.0/16 (Private - RFC 1918)
+  if (a === 192 && b === 168) return true;
+  // 198.18.0.0/15 (Benchmarking - RFC 2544: 198.18.0.0 - 198.19.255.255)
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  // 198.51.100.0/24 (TEST-NET-2 - RFC 5737)
+  if (a === 198 && b === 51 && c === 100) return true;
+  // 203.0.113.0/24 (TEST-NET-3 - RFC 5737)
+  if (a === 203 && b === 0 && c === 113) return true;
+  // 224.0.0.0/4 (Multicast - RFC 5771: 224 - 239)
+  if (a >= 224 && a <= 239) return true;
+  // 240.0.0.0/4 (Reserved / Future use - RFC 1112: 240 - 255)
+  if (a >= 240) return true;
+  // 255.255.255.255 (Broadcast)
+  if (a === 255 && b === 255 && c === 255 && d === 255) return true;
+
+  return false;
+}
+
+export function isPrivateOrReservedIpv6(ip: string): boolean {
+  try {
+    const words = parseIPv6Words(ip);
+    if (words.length !== 8 || words.some((w) => isNaN(w) || w < 0 || w > 0xffff)) {
+      return true;
+    }
+
+    // ::/128 (Unspecified) & ::1/128 (Loopback)
+    const allZeroExceptLast = words.slice(0, 7).every((w) => w === 0);
+    if (allZeroExceptLast && (words[7] === 0 || words[7] === 1)) {
+      return true;
+    }
+
+    // IPv4-mapped / IPv4-translated (::ffff:0:0/96 or ::ffff:0:0:0/96 or ::0:ffff:0:0)
+    const isMapped =
+      (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0xffff) ||
+      (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0xffff && words[5] === 0) ||
+      (words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0);
+
+    if (isMapped) {
+      const ipv4Str = `${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`;
+      if (isPrivateOrReservedIpv4(ipv4Str)) return true;
+    }
+
+    // fc00::/7 (ULA - Unique Local Address, private IPv6: fc00: to fdff:)
+    if ((words[0] & 0xfe00) === 0xfc00) return true;
+
+    // fe80::/10 (Link-Local unicast: fe80: to febf:)
+    if ((words[0] & 0xffc0) === 0xfe80) return true;
+
+    // ff00::/8 (Multicast)
+    if ((words[0] & 0xff00) === 0xff00) return true;
+
+    // 2001:db8::/32 (Documentation)
+    if (words[0] === 0x2001 && words[1] === 0x0db8) return true;
+
+    // 2002::/16 (6to4 addressing - maps to IPv4 in words[1], words[2])
+    if (words[0] === 0x2002) {
+      const ipv4Str = `${words[1] >> 8}.${words[1] & 0xff}.${words[2] >> 8}.${words[2] & 0xff}`;
+      if (isPrivateOrReservedIpv4(ipv4Str)) return true;
+    }
+
+    // 64:ff9b::/96 (IPv4/IPv6 translation - RFC 6052)
+    if (words[0] === 0x0064 && words[1] === 0xff9b && words[2] === 0 && words[3] === 0 && words[4] === 0 && words[5] === 0) {
+      const ipv4Str = `${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`;
+      if (isPrivateOrReservedIpv4(ipv4Str)) return true;
+    }
+
+    // 100::/64 (Discard-only prefix - RFC 6666)
+    if (words[0] === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0) return true;
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export function isPrivateOrReservedIp(ip: string): boolean {
+  if (!ip || typeof ip !== 'string') return true;
+  const cleaned = ip.trim().replace(/^\[|\]$/g, '');
+  const ver = net.isIP(cleaned);
+  if (ver === 4) return isPrivateOrReservedIpv4(cleaned);
+  if (ver === 6) return isPrivateOrReservedIpv6(cleaned);
+  return true;
+}
+
 export function isPrivateOrReservedHost(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
+  if (!hostname || typeof hostname !== 'string') return true;
+  const lower = hostname.toLowerCase().trim().replace(/^\[|\]$/g, '');
+
   if (
     lower === 'localhost' ||
+    lower.endsWith('.localhost') ||
     lower.endsWith('.local') ||
     lower.endsWith('.internal') ||
-    lower === '127.0.0.1' ||
-    lower === '0.0.0.0' ||
-    lower === '::1'
+    lower.endsWith('.lan') ||
+    lower === 'metadata.google.internal' ||
+    lower === 'instance-data'
   ) {
     return true;
   }
 
-  // IPv4 regex check
-  const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-  const match = lower.match(ipv4Regex);
-  if (match) {
-    const octets = match.slice(1, 5).map(Number);
-    if (octets.some((n) => n < 0 || n > 255)) return true;
-
-    // 127.0.0.0/8 (Loopback)
-    if (octets[0] === 127) return true;
-    // 10.0.0.0/8 (Private)
-    if (octets[0] === 10) return true;
-    // 172.16.0.0/12 (Private)
-    if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return true;
-    // 192.168.0.0/16 (Private)
-    if (octets[0] === 192 && octets[1] === 168) return true;
-    // 169.254.0.0/16 (Link-local / AWS metadata)
-    if (octets[0] === 169 && octets[1] === 254) return true;
-    // 0.0.0.0/8
-    if (octets[0] === 0) return true;
+  // Check if hostname is an IP literal
+  if (net.isIP(lower)) {
+    return isPrivateOrReservedIp(lower);
   }
 
   return false;
+}
+
+// In-Memory sliding-window rate limiter (for Vercel warm containers)
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+const rateLimitStore = new Map<string, RateLimitEntry>();
+export const MAX_REQUESTS_PER_WINDOW = 15;
+export const WINDOW_MS = 60 * 1000; // 60 seconds
+
+export function checkRateLimit(identifier: string): { allowed: boolean; remaining: number; retryAfter?: number } {
+  const now = Date.now();
+  const entry = rateLimitStore.get(identifier);
+
+  // Periodic pruning of expired entries
+  if (rateLimitStore.size > 500) {
+    for (const [key, val] of rateLimitStore.entries()) {
+      if (val.resetAt <= now) rateLimitStore.delete(key);
+    }
+  }
+
+  if (!entry || entry.resetAt <= now) {
+    rateLimitStore.set(identifier, { count: 1, resetAt: now + WINDOW_MS });
+    return { allowed: true, remaining: MAX_REQUESTS_PER_WINDOW - 1 };
+  }
+
+  if (entry.count >= MAX_REQUESTS_PER_WINDOW) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+    return { allowed: false, remaining: 0, retryAfter };
+  }
+
+  entry.count++;
+  return { allowed: true, remaining: MAX_REQUESTS_PER_WINDOW - entry.count };
+}
+
+// Robust Safe Fetch with IP Pinning (Zero DNS Rebinding TOCTOU) and Manual Redirect Validation
+export async function safeFetchHtml(
+  inputUrl: string,
+  maxRedirects = 5
+): Promise<{ body: string; finalUrl: string }> {
+  let currentUrlStr = inputUrl;
+  let redirectCount = 0;
+
+  while (redirectCount <= maxRedirects) {
+    const parsedUrl = new URL(currentUrlStr);
+
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error('Only HTTP and HTTPS URLs are supported.');
+    }
+
+    if (parsedUrl.username || parsedUrl.password) {
+      throw new Error('URLs with embedded credentials are not allowed.');
+    }
+
+    const isHttps = parsedUrl.protocol === 'https:';
+    const defaultPort = isHttps ? 443 : 80;
+    const port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : defaultPort;
+    if (port !== 80 && port !== 443) {
+      throw new Error(`Non-standard port ${port} is blocked for security.`);
+    }
+
+    if (isPrivateOrReservedHost(parsedUrl.hostname)) {
+      throw new Error('Access to private or internal network addresses is blocked.');
+    }
+
+    // DNS Resolution & Validation of all returned IPs
+    let resolvedAddresses: { address: string; family: number }[] = [];
+    const literalFamily = net.isIP(parsedUrl.hostname);
+    if (literalFamily) {
+      resolvedAddresses = [{ address: parsedUrl.hostname, family: literalFamily }];
+    } else {
+      try {
+        resolvedAddresses = await dns.lookup(parsedUrl.hostname, { all: true });
+      } catch (err: any) {
+        throw new Error(`Could not resolve host ${parsedUrl.hostname}: ${err.message}`);
+      }
+    }
+
+    if (!resolvedAddresses || resolvedAddresses.length === 0) {
+      throw new Error(`Could not resolve host ${parsedUrl.hostname}.`);
+    }
+
+    for (const entry of resolvedAddresses) {
+      if (isPrivateOrReservedIp(entry.address)) {
+        throw new Error('Host resolves to a private or reserved network address.');
+      }
+    }
+
+    // Select the first validated public IP address
+    const targetIpEntry = resolvedAddresses[0];
+
+    // Perform HTTP request with destination IP pinning to prevent DNS rebinding
+    const requestLib = isHttps ? https : http;
+    const responseData = await new Promise<{ isRedirect: boolean; nextUrl?: string; body?: string }>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        req.destroy(new Error('Request timed out while fetching the job posting.'));
+      }, 8000);
+
+      const options = {
+        hostname: parsedUrl.hostname,
+        port,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'GET',
+        headers: {
+          Host: parsedUrl.host,
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (JobTrack/1.0 JobBot)',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Connection: 'close',
+        },
+        servername: parsedUrl.hostname, // Crucial for TLS SNI and certificate validation
+        lookup: (_hostname: string, _opts: any, callback: any) => {
+          // Pin to the validated IP so no secondary DNS resolution can be re-bound
+          callback(null, targetIpEntry.address, targetIpEntry.family);
+        },
+      };
+
+      const req = requestLib.request(options, (res) => {
+        clearTimeout(timeout);
+
+        // Pre-validate Redirects before following
+        if ([301, 302, 303, 307, 308].includes(res.statusCode || 0)) {
+          const location = res.headers.location;
+          res.resume();
+          if (!location) {
+            return reject(new Error('Redirect missing location header.'));
+          }
+          try {
+            const redirectUrl = new URL(location, currentUrlStr);
+            return resolve({ isRedirect: true, nextUrl: redirectUrl.toString() });
+          } catch {
+            return reject(new Error('Invalid redirect target URL.'));
+          }
+        }
+
+        if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+          res.resume();
+          return reject(
+            new Error(`Website responded with HTTP status ${res.statusCode}.`)
+          );
+        }
+
+        const contentType = res.headers['content-type'] || '';
+        if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+          res.resume();
+          return reject(new Error('The provided URL does not return an HTML web page.'));
+        }
+
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        const MAX_BYTES = 3 * 1024 * 1024;
+
+        res.on('data', (chunk: Buffer) => {
+          totalBytes += chunk.length;
+          if (totalBytes > MAX_BYTES) {
+            req.destroy(new Error('Page content exceeded the maximum allowed size (3MB).'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf-8');
+          resolve({ isRedirect: false, body });
+        });
+      });
+
+      req.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
+      req.end();
+    });
+
+    if (responseData.isRedirect && responseData.nextUrl) {
+      redirectCount++;
+      currentUrlStr = responseData.nextUrl;
+      continue;
+    }
+
+    return { body: responseData.body || '', finalUrl: currentUrlStr };
+  }
+
+  throw new Error('Too many redirects followed.');
 }
 
 // Decode basic HTML entities
@@ -605,20 +919,135 @@ function findJobPosting(data: any): any {
 // 4. Main Serverless Request Handler
 // ============================================================================
 
+function getSupabaseCredentials(): { url: string; anonKey: string } {
+  let url = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
+  let anonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '').trim();
+
+  if (!url || !anonKey) {
+    try {
+      const envPath = path.resolve(process.cwd(), '.env.local');
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eq = trimmed.indexOf('=');
+          if (eq !== -1) {
+            const k = trimmed.slice(0, eq).trim();
+            const v = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+            if (k === 'VITE_SUPABASE_URL' && !url) url = v;
+            if (k === 'VITE_SUPABASE_ANON_KEY' && !anonKey) anonKey = v;
+          }
+        }
+      }
+    } catch {
+      // Ignore reading error
+    }
+  }
+
+  return {
+    url: url.replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, ''),
+    anonKey,
+  };
+}
+
+// ============================================================================
+// 4. Main Serverless Request Handler
+// ============================================================================
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // 1. Restricted CORS headers (no wildcards)
+  const origin = req.headers.origin;
+  const allowedOrigins = [
+    'https://jobtrack-xi-indol.vercel.app',
+    /^https:\/\/jobtrack[a-z0-9-]*\.vercel\.app$/,
+    /^http:\/\/localhost:\d+$/,
+    /^http:\/\/127\.0\.0\.1:\d+$/,
+  ];
+
+  let isAllowedOrigin = false;
+  if (typeof origin === 'string') {
+    isAllowedOrigin = allowedOrigins.some((allowed) =>
+      typeof allowed === 'string' ? allowed === origin : allowed.test(origin)
+    );
+  }
+
+  if (isAllowedOrigin && origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Vary', 'Origin');
 
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    return res.status(204).end();
   }
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed. Use POST.' });
   }
 
+  // 2. Authentication Verification
+  const authHeader = req.headers.authorization || (req.headers as any).Authorization;
+  const token =
+    typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'Authentication required. Please sign in to import job details.',
+    });
+  }
+
+  const { url: supabaseUrl, anonKey: supabaseAnonKey } = getSupabaseCredentials();
+  let userId = 'authenticated-user';
+
+  if (
+    supabaseUrl &&
+    supabaseAnonKey &&
+    !supabaseUrl.includes('your-project-id') &&
+    !supabaseAnonKey.includes('your-anon-public-key')
+  ) {
+    try {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const { data, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !data?.user) {
+        return res.status(401).json({
+          error: 'Invalid or expired session. Please sign in again.',
+        });
+      }
+      userId = data.user.id;
+    } catch {
+      return res.status(401).json({
+        error: 'Authentication verification failed. Please sign in again.',
+      });
+    }
+  }
+
+  // 3. In-memory Rate Limiting per User/IP
+  const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '127.0.0.1')
+    .toString()
+    .split(',')[0]
+    .trim();
+  const rateLimitKey = `${userId}:${clientIp}`;
+  const rateLimit = checkRateLimit(rateLimitKey);
+
+  res.setHeader('X-RateLimit-Limit', MAX_REQUESTS_PER_WINDOW.toString());
+  res.setHeader('X-RateLimit-Remaining', rateLimit.remaining.toString());
+
+  if (!rateLimit.allowed) {
+    if (rateLimit.retryAfter) {
+      res.setHeader('Retry-After', rateLimit.retryAfter.toString());
+    }
+    return res.status(429).json({
+      error: 'Import rate limit exceeded. Please wait a minute before importing another job posting.',
+    });
+  }
+
+  // 4. Input Validation & Safe Fetching
   try {
     const { url } = req.body || {};
 
@@ -637,85 +1066,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Only HTTP and HTTPS URLs are supported.' });
     }
 
-    if (isPrivateOrReservedHost(parsedUrl.hostname)) {
-      return res.status(400).json({ error: 'Access to private or internal network addresses is blocked.' });
+    if (parsedUrl.username || parsedUrl.password) {
+      return res.status(400).json({ error: 'URLs with embedded credentials are not allowed.' });
     }
 
-    // Fetch with timeout, user agent, safe redirect checking, and 3MB size limit
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+    const defaultPort = parsedUrl.protocol === 'https:' ? 443 : 80;
+    const port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : defaultPort;
+    if (port !== 80 && port !== 443) {
+      return res.status(400).json({ error: `Non-standard port ${port} is blocked for security.` });
+    }
 
-    let response: Response;
+    // Perform robust SSRF-safe fetch with IP pinning and redirect validation
+    let fetchResult: { body: string; finalUrl: string };
     try {
-      response = await fetch(parsedUrl.toString(), {
-        signal: controller.signal,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 (JobTrack/1.0 JobBot)',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-        redirect: 'follow',
-      });
+      fetchResult = await safeFetchHtml(parsedUrl.toString());
     } catch (fetchErr: any) {
-      clearTimeout(timeout);
-      if (fetchErr.name === 'AbortError') {
+      const msg = fetchErr?.message || 'Unable to connect to website.';
+      if (msg.includes('timed out')) {
         return res.status(504).json({ error: 'Request timed out while fetching the job posting.' });
       }
-      return res.status(502).json({ error: `Unable to connect to the requested website: ${fetchErr.message}` });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    // Check redirect target
-    if (response.url) {
-      const redirectUrl = new URL(response.url);
-      if (isPrivateOrReservedHost(redirectUrl.hostname)) {
-        return res.status(400).json({ error: 'Redirect to private network address blocked.' });
+      if (
+        msg.includes('blocked') ||
+        msg.includes('private or reserved') ||
+        msg.includes('credentials') ||
+        msg.includes('Non-standard port') ||
+        msg.includes('Only HTTP and HTTPS')
+      ) {
+        return res.status(400).json({ error: msg });
       }
-    }
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: `Website responded with HTTP status ${response.status} (${response.statusText}). It may require login or blocked the request.`,
+      return res.status(502).json({
+        error: 'Unable to access the requested job posting. The website may require login or blocked the request.',
       });
     }
 
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
-      return res.status(400).json({ error: 'The provided URL does not return an HTML web page.' });
-    }
+    const html = fetchResult.body;
+    const finalParsedUrl = new URL(fetchResult.finalUrl);
 
-    // Read response with 3MB safety limit
-    const reader = response.body?.getReader();
-    let receivedLength = 0;
-    const chunks: Uint8Array[] = [];
-    const MAX_BYTES = 3 * 1024 * 1024;
-
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          receivedLength += value.length;
-          if (receivedLength > MAX_BYTES) {
-            reader.cancel();
-            break;
-          }
-          chunks.push(value);
-        }
-      }
-    }
-
-    const fullBuffer = new Uint8Array(receivedLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      fullBuffer.set(chunk, offset);
-      offset += chunk.length;
-    }
-    const html = new TextDecoder('utf-8').decode(fullBuffer);
-
-    // 1. Structured Data JSON-LD
+    // 5. Parse Structured Data JSON-LD
     const jsonLdRegex = /<script\s+[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
     let jsonLdMatch;
     let jobPosting: any = null;
@@ -733,7 +1120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // 2. Parse Meta Map
+    // 6. Parse Meta Map
     const metaRegex = /<meta\s+[^>]*(?:name|property|id)=["']([^"']+)["'][^>]*content=["']([^"']*)["'][^>]*>/gi;
     const metaRegexAlt = /<meta\s+[^>]*content=["']([^"']*)["'][^>]*(?:name|property|id)=["']([^"']+)["'][^>]*>/gi;
     const metaMap: Record<string, string> = {};
@@ -746,13 +1133,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       metaMap[mMatch[2].toLowerCase()] = decodeHtmlEntities(mMatch[1].trim());
     }
 
-    // 3. Dissect HTML <title> tag
+    // 7. Dissect HTML <title> tag
     const titleTagMatch = /<title[^>]*>([^<]+)<\/title>/i.exec(html);
     const rawTitleTag = titleTagMatch ? titleTagMatch[1] : '';
     const dissectedTitle = parseDissectedTitle(rawTitleTag);
 
-    // 4. Extract fields independently via hierarchy
-    const company = extractCompany(jobPosting, html, metaMap, parsedUrl, dissectedTitle);
+    // 8. Extract fields independently via hierarchy
+    const company = extractCompany(jobPosting, html, metaMap, finalParsedUrl, dissectedTitle);
     const position = extractJobTitle(jobPosting, html, metaMap, dissectedTitle);
     const location = extractLocation(jobPosting, html, dissectedTitle);
     const salary = extractSalary(jobPosting, html);
@@ -775,12 +1162,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         salary: salary || '',
         description: description || '',
         employmentType: employmentType || '',
-        url: parsedUrl.toString(),
+        url: finalParsedUrl.toString(),
       },
     });
   } catch (err: any) {
     return res.status(500).json({
-      error: `Unexpected error parsing job posting: ${err.message || 'Unknown error'}`,
+      error: 'An unexpected error occurred while parsing the job posting.',
     });
   }
 }

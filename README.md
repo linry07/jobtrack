@@ -6,6 +6,22 @@ JobTrack brings applications, interview stages, and job-search analytics into on
 
 **[Live Demo](https://jobtrack-xi-indol.vercel.app/)** · **[GitHub Repository](https://github.com/linry07/jobtrack)**
 
+## Screenshots
+
+Preview the Dashboard, drag-and-drop Applications board, and Analytics views. The screenshots show a populated account to demonstrate the interface.
+
+### Dashboard
+
+![JobTrack dashboard showing application totals, interviews, offers, trends, and recent activity](screenshots/dashboard.png)
+
+### Application Tracker
+
+![JobTrack Kanban application board with Saved, Applied, Interviewing, and Offer stages](screenshots/applications.png)
+
+### Analytics
+
+![JobTrack analytics showing average response time, success rate, monthly activity, and status distribution](screenshots/analytics.png)
+
 ## Features
 
 - **Application tracking:** Add, edit, and delete applications; organize them in a drag-and-drop Kanban board across Saved, Applied, Interviewing, Offer, and Rejected stages.

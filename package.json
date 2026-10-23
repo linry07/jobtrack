@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "npx tsx tests/extraction.test.mjs",
+    "test:security": "npx tsx tests/security-ssrf-auth.test.mjs",
     "test:sample-data": "node tests/no-sample-data.test.mjs",
     "verify:supabase": "node scripts/verify-supabase.mjs",
     "test:multiuser": "node tests/supabase-multiuser.test.mjs",

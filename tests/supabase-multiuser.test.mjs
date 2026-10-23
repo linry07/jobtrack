@@ -99,7 +99,7 @@ async function run() {
         email: userA_email,
         password: userA_pass,
       });
-      if (aError?.code === 'email_provider_disabled' || bError?.code === 'email_provider_disabled') {
+      if (aError?.code === 'email_provider_disabled') {
         console.log('ℹ Notice: Email logins are disabled in Supabase (Google-only authentication is active).');
         console.log('ℹ Skipping password-based multi-user session tests (requires Google OAuth tokens).');
         results.skipped.push('Requirements 1-5 (Skipped because email logins are disabled in Supabase for Google-only auth)');
